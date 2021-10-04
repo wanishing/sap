@@ -65,25 +65,6 @@
      :created-at created-at
      :age (parse-age (to-inst created-at))}))
 
-(defn- attach-executors [{:keys [id] :as app}]
-  (let [label (format "sparkoperator.k8s.io/app-name=%s" id)
-        executors (-> (run-sh "kubectl" "get" "pods" "-l" label "-o=jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
-                      (string/split-lines)
-                      count
-                      dec)
-        app (assoc app :executors executors)]
-    app))
-
-(comment
-  (let [executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" "-o=jsonpath={range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.labels}{\"\\n\"}{end}")
-                              (string/split-lines)
-                              (map #(let [[pod, labels] (string/split % #"\t")
-                                          app (-> labels
-                                                  (json/parse-string true)
-                                                  (:app))]
-                                      {:executor pod :app app})))]
-           executors))
-
 (defn- spark-apps
   ([state]
    (if-let [state (and (some? state) (string/upper-case state))]
