@@ -252,7 +252,6 @@
         "  desc          alias for `kubectl describe` command"
         "  logs          alias for `kubectl logs` command"
         "  pods          display all the pods associated to the given application id"
-        "  reapply       re-apply existing application by id (current application will be deleted)"
         ""]
        (string/join \newline)))
 
