@@ -161,19 +161,19 @@
          (map parse))))
 
 (defn- find-apps-by
-  [{:keys [state id age prefix wide]}]
+  [{:keys [state id days prefix wide]}]
   (let [apps (command-factory :apps)
         apps  (if (some? id)
                 [(find-app (apps) id)]
                 (apps state))
         older? (fn [{:keys [created-at]}]
                  (let [diff (.toDays (java.time.Duration/between (to-inst created-at) (now)))]
-                   (>= diff age)))
+                   (>= diff days)))
         attach-executors (fn [executors {:keys [id] :as app}]
                            (let [pods (filter #(= id (:app %)) executors)]
                              (assoc app :executors (count pods))))
         apps (cond->> apps
-               (some? age) (filter older?)
+               (some? days) (filter older?)
                (some? prefix) (filter (fn [{:keys [id]}]
                                         (string/starts-with? id prefix)))
                (some? wide) (map (partial attach-executors (fetch-executors))))]
@@ -225,33 +225,33 @@
   (command-runner :reapply args))
 
 (def cli-options
-  [["-s" "--state STATE" "State of the apps to be deleted"]
-   ["-i" "--id ID" "Appliaction id, can be supplied partially"]
-   [nil "--age AGE" "Age of apps to be  deleted"
+  [["-s" "--state STATE" "State of application"]
+   ["-i" "--id ID" "Application id, can be supplied partially"]
+   [nil "--days DAYES" "Minimum amount of days the application is alive"
     :parse-fn #(Integer/parseInt %)
     :default 0]
-   ["-p" "--prefix PREFIX" "Prefix of apps to be  deleted"]
+   ["-p" "--prefix PREFIX" "Prefix of application id"]
    ["-w" "--wide"]
    ["-v" "--verbose"]
    ["-h" "--help"]])
 
 (defn- usage [options-summary]
-  (->> ["Common actions against k8s spark applications."
+  (->> ["kubectl wrapper to perform common actions against Spark applications."
         ""
-        "Usage: bb sap.clj action [options]"
+        "Usage: sap action [options]"
         ""
         "Options:"
         options-summary
         ""
         "Actions:"
-        "  delete        delete appliactions by state, or by (possibly partial) id, or by age"
-        "  cleanup       delete COMPLETED/FAILED/Failed applications, optionally by age"
-        "  ls            list appliactions, optionally by state or age"
-        "  ui            access application UI given job id"
-        "  get           get yaml of applicatio given job id and mode"
+        "  delete        delete appliactions"
+        "  cleanup       delete COMPLETED/FAILED/Failed applications"
+        "  ls            list appliactions"
+        "  ui            port-forwarding application ui given id"
+        "  get           alias for `kubectl get -o yaml` command"
         "  desc          alias for `kubectl describe` command"
         "  logs          alias for `kubectl logs` command"
-        "  pods          display all the pods associated to the given application id"
+        "  pods          display all pods associated to application"
         ""]
        (string/join \newline)))
 
