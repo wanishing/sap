@@ -153,12 +153,13 @@
                 (let [[pod, labels] (string/split extr #"\t")
                       app (-> labels
                               (json/parse-string true)
-                              (:app))]
+                              (:sparkoperator.k8s.io/app-name))]
                   {:executor pod :app app}))
-        fields-selector "-o=jsonpath={range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.labels}{\"\\n\"}{end}"]
-    (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" fields-selector)
-         (string/split-lines)
-         (map parse))))
+        fields-selector "-o=jsonpath={range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.labels}{\"\\n\"}{end}"
+        executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" fields-selector)
+                       (string/split-lines)
+                       (map parse))]
+    executors))
 
 (defn- find-apps-by
   [{:keys [state id days prefix wide]}]
