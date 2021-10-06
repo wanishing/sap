@@ -270,7 +270,7 @@
         options-summary
         ""
         "Actions:"
-        "  delete        delete applications"
+        "  delete        delete application"
         "  cleanup       delete COMPLETED/FAILED/Failed applications"
         "  ls            list applications"
         "  ui            port-forwarding application ui given id"
@@ -278,6 +278,7 @@
         "  desc          alias for `kubectl describe` command"
         "  logs          alias for `kubectl logs` command"
         "  pods          display all pods associated to application"
+        "  reapply       re-apply application (keeping the same id)"
         ""]
        (string/join \newline)))
 
