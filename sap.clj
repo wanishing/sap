@@ -174,17 +174,18 @@
     executors))
 
 (def wide-info
-  (let [add-executors (fn [executors {:keys [id] :as app}]
-                        (let [pods (filter #(= id (:app %)) executors)]
-                          (assoc app :executors (count pods))))
-        add-duration (fn [{:keys [age created-at terminated-at] :as app}]
-                       (let [duration (if (some? terminated-at)
-                                        (parse-duration (to-inst terminated-at) (to-inst created-at))
-                                        age)]
-                         (assoc app :duration duration)))]
-    (comp
-     (map add-duration)
-     (map (partial add-executors (fetch-executors))))))
+  (delay
+    (let [add-executors (fn [executors {:keys [id] :as app}]
+                          (let [pods (filter #(= id (:app %)) executors)]
+                            (assoc app :executors (count pods))))
+          add-duration (fn [{:keys [age created-at terminated-at] :as app}]
+                         (let [duration (if (some? terminated-at)
+                                          (parse-duration (to-inst terminated-at) (to-inst created-at))
+                                          age)]
+                           (assoc app :duration duration)))]
+      (comp
+       (map add-duration)
+       (map (partial add-executors (fetch-executors)))))))
 
 (defn- find-apps-by
   [{:keys [state id days prefix wide]}]
@@ -199,7 +200,7 @@
                (some? days) (filter older?)
                (some? prefix) (filter (fn [{:keys [id]}]
                                         (string/starts-with? id prefix)))
-               (some? wide) (into [] wide-info))]
+               (some? wide) (into [] @wide-info))]
     apps))
 
 (defn- command-runner [cmd options]
