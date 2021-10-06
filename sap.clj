@@ -47,7 +47,7 @@
 
 (defn- to-inst [s] (java.time.Instant/parse s))
 
-(defn- parse-age [start end]
+(defn- parse-duration [start end]
   (let [diff (java.time.Duration/between end start)
         units [[(.toDays diff) "d"]
                [(mod (.toHours diff) 24) "h"]
@@ -58,12 +58,13 @@
          (map (fn [[diff unit]] (format "%d%s" diff unit)))
          (string/join))))
 
-(defn- parse-app [[id created-at state]]
-  (let [parse-age (partial parse-age (now))]
+(defn- parse-app [[id created-at state terminated-at]]
+  (let [parse-duration (partial parse-duration (now))]
     {:id id
      :state state
      :created-at created-at
-     :age (parse-age (to-inst created-at))}))
+     :terminated-at (if (= terminated-at "<nil>") nil terminated-at)
+     :age (parse-duration (to-inst created-at))}))
 
 (defn- spark-apps
   ([state]
@@ -72,7 +73,7 @@
                (= (:state app) state)) (spark-apps))
      (spark-apps)))
   ([]
-   (let [raw-apps (run-sh "kubectl" "get" "sparkapplication" "-o=jsonpath={range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.creationTimestamp}{\"\\t\"}{.status.applicationState.state}{\"\\n\"}{end}")
+   (let [raw-apps (run-sh "kubectl" "get" "sparkapplication" "-o=jsonpath={range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.creationTimestamp}{\"\\t\"}{.status.applicationState.state}{\"\\t\"}{.status.terminationTime}{\"\\n\"}{end}")
          apps (->> raw-apps
                    (string/split-lines)
                    (filter #(not (string/blank? %)))
@@ -161,6 +162,19 @@
                        (map parse))]
     executors))
 
+(def wide-info
+  (let [add-executors (fn [executors {:keys [id] :as app}]
+                            (let [pods (filter #(= id (:app %)) executors)]
+                              (assoc app :executors (count pods))))
+        add-duration (fn [{:keys [age created-at terminated-at] :as app}]
+                       (let [duration (if (some? terminated-at)
+                                        (parse-duration (to-inst terminated-at) (to-inst created-at))
+                                        age)]
+                         (assoc app :duration duration)))]
+    (comp
+     (map add-duration)
+     (map (partial add-executors (fetch-executors))))))
+
 (defn- find-apps-by
   [{:keys [state id days prefix wide]}]
   (let [apps (command-factory :apps)
@@ -170,14 +184,11 @@
         older? (fn [{:keys [created-at]}]
                  (let [diff (.toDays (java.time.Duration/between (to-inst created-at) (now)))]
                    (>= diff days)))
-        attach-executors (fn [executors {:keys [id] :as app}]
-                           (let [pods (filter #(= id (:app %)) executors)]
-                             (assoc app :executors (count pods))))
         apps (cond->> apps
                (some? days) (filter older?)
                (some? prefix) (filter (fn [{:keys [id]}]
                                         (string/starts-with? id prefix)))
-               (some? wide) (map (partial attach-executors (fetch-executors))))]
+               (some? wide) (into [] wide-info))]
     apps))
 
 (defn- command-runner [cmd options]
@@ -204,7 +215,7 @@
 (defmethod command :ls [{:keys [args]}]
   (->> (find-apps-by args)
        (sort-by (juxt :id :created-at))
-       (map #(dissoc % :created-at))
+       (map #(dissoc % :created-at :terminated-at))
        (print-apps)))
 
 (defmethod command :pods [{:keys [args]}]
