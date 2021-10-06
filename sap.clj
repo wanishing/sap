@@ -119,7 +119,6 @@
         fname (format "/tmp/%s.json" id)
         delete (command-factory :delete)]
     (spit fname fresh-app)
-    (spit (format "/tmp/debug-%s.json" id) app)
     (println (format "Fresh app created at %s" fname))
     (delete {:id id})
     (println "Old app deleted")
