@@ -107,28 +107,28 @@
           (forward-port port)
           (recur (inc port)))))))
 
-(defn- delete-app [resource id]
-  (run-sh "kubectl" "delete" resource id))
+(declare command-factory)
 
-(defn- reapply [resource id]
-  (let [app (json/parse-string (run-sh "kubectl" "get" resource id "-o" "json") true)
+(defn- reapply [id]
+  (let [app (json/parse-string (run-sh "kubectl" "get" "sparkapplication" id "-o" "json") true)
         fresh-metadata (select-keys (:metadata app) [:name :namespace])
         fresh-app (-> app
                       (assoc :metadata fresh-metadata)
                       (dissoc :status)
                       (json/generate-string))
-        fname (format "/tmp/%s.json" id)]
+        fname (format "/tmp/%s.json" id)
+        delete (command-factory :delete)]
     (spit fname fresh-app)
     (spit (format "/tmp/debug-%s.json" id) app)
     (println (format "Fresh app created at %s" fname))
-    (delete-app resource id)
+    (delete {:id id})
     (println "Old app deleted")
     (run-proc "kubectl" "apply" "-f" fname)))
 
 (def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods"})
 
 (def commands-map {:delete (fn [{:keys [id]}]
-                             (delete-app "sparkapplication" id))
+                             (run-proc "kubectl" "delete" "sparkapplication" id))
 
                    :apps spark-apps
 
@@ -143,14 +143,14 @@
                            (print (run-sh "kubectl" "describe" "sparkapplication" id)))
 
                    :reapply (fn [{:keys [id]}]
-                              (reapply "sparkapplication" id))
+                              (reapply id))
 
                    :logs (fn [{:keys [id]}]
                            (run-proc "kubectl" "logs" "-f" (spark-driver-app id)))
 
                    :pods (fn [{:keys [id]}]
-                                (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
-                                  (run-proc "kubectl" "get" "pods" "-l" label)))})
+                           (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
+                             (run-proc "kubectl" "get" "pods" "-l" label)))})
 
 (defn- command-factory [cmd]
   (get-in commands-map [cmd]))
@@ -176,8 +176,8 @@
 
 (def wide-info
   (let [add-executors (fn [executors {:keys [id] :as app}]
-                            (let [pods (filter #(= id (:app %)) executors)]
-                              (assoc app :executors (count pods))))
+                        (let [pods (filter #(= id (:app %)) executors)]
+                          (assoc app :executors (count pods))))
         add-duration (fn [{:keys [age created-at terminated-at] :as app}]
                        (let [duration (if (some? terminated-at)
                                         (parse-duration (to-inst terminated-at) (to-inst created-at))
@@ -208,16 +208,18 @@
         cmd (command-factory cmd)]
     (cmd app)))
 
+(defn- commands-runner [cmd options]
+  (let [apps (find-apps-by options)
+        f (command-factory cmd)]
+    (doseq [app apps]
+      (f app))
+    (println "Done.")))
+
 (defmulti command
   (fn [{:keys [action]}] (keyword action)))
 
 (defmethod command :delete [{:keys [args]}]
-  (let [apps (find-apps-by args)
-        cleaner (command-factory :delete)]
-    (doseq [app apps]
-      (cleaner app)
-      (println "Deleted" (:id app)))
-    (println "Done.")))
+  (commands-runner :delete args))
 
 (defmethod command :cleanup [{:keys [args]}]
   (doseq [state (command-factory :states)]
@@ -246,7 +248,7 @@
   (command-runner :logs args))
 
 (defmethod command :reapply [{:keys [args]}]
-  (command-runner :reapply args))
+  (commands-runner :reapply args))
 
 (def cli-options
   [["-s" "--state STATE" "State of application"]
