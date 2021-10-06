@@ -66,6 +66,13 @@
      :terminated-at (if (= terminated-at "<nil>") nil terminated-at)
      :age (parse-duration (to-inst created-at))}))
 
+(defn- format-jsonpath [fields]
+  (let [formatted-fields (->> fields
+                              (map #(format "{%s}" %))
+                              (string/join "{\"\\t\"}"))
+        jsonpath (format "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}" formatted-fields)]
+    jsonpath))
+
 (defn- spark-apps
   ([state]
    (if-let [state (and (some? state) (string/upper-case state))]
@@ -73,7 +80,11 @@
                (= (:state app) state)) (spark-apps))
      (spark-apps)))
   ([]
-   (let [raw-apps (run-sh "kubectl" "get" "sparkapplication" "-o=jsonpath={range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.creationTimestamp}{\"\\t\"}{.status.applicationState.state}{\"\\t\"}{.status.terminationTime}{\"\\n\"}{end}")
+   (let [raw-apps (run-sh "kubectl" "get" "sparkapplication" (format-jsonpath
+                                                              [".metadata.name"
+                                                               ".metadata.creationTimestamp"
+                                                               ".status.applicationState.state"
+                                                               ".status.terminationTime"]))
          apps (->> raw-apps
                    (string/split-lines)
                    (filter #(not (string/blank? %)))
@@ -156,8 +167,9 @@
                               (json/parse-string true)
                               (:sparkoperator.k8s.io/app-name))]
                   {:executor pod :app app}))
-        fields-selector "-o=jsonpath={range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.labels}{\"\\n\"}{end}"
-        executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" fields-selector)
+        executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" (format-jsonpath
+                                                                                  [".metadata.name"
+                                                                                   ".metadata.labels"]))
                        (string/split-lines)
                        (map parse))]
     executors))
