@@ -270,9 +270,9 @@
         options-summary
         ""
         "Actions:"
-        "  delete        delete appliactions"
+        "  delete        delete applications"
         "  cleanup       delete COMPLETED/FAILED/Failed applications"
-        "  ls            list appliactions"
+        "  ls            list applications"
         "  ui            port-forwarding application ui given id"
         "  get           alias for `kubectl get -o yaml` command"
         "  desc          alias for `kubectl describe` command"
