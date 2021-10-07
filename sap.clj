@@ -134,10 +134,10 @@
                    :ui spark-ui
 
                    :get (fn [{:keys [id]}]
-                          (print (run-sh "kubectl" "get" "sparkapplication" id "-o" "yaml")))
+                          (run-proc "kubectl" "get" "sparkapplication" id "-o" "yaml"))
 
                    :desc (fn [{:keys [id]}]
-                           (print (run-sh "kubectl" "describe" "sparkapplication" id)))
+                           (run-proc "kubectl" "describe" "sparkapplication" id))
 
                    :reapply reapply
 
