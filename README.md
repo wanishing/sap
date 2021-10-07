@@ -1,5 +1,5 @@
 # sap
-`sap` is a kubectl wrapper cli to perform common actions against spark applications, running using [babashka](https://github.com/babashka/babashka).
+`sap` is a kubectl wrapper CLI to perform common actions against spark applications, running using [babashka](https://github.com/babashka/babashka).
 
 ## Installation
 
