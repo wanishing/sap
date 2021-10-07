@@ -59,12 +59,11 @@
          (string/join))))
 
 (defn- parse-app [[id created-at state terminated-at]]
-  (let [parse-duration (partial parse-duration (now))]
-    {:id id
-     :state state
-     :created-at created-at
-     :terminated-at (if (= terminated-at "<nil>") nil terminated-at)
-     :age (parse-duration (to-inst created-at))}))
+  {:id id
+   :state state
+   :created-at created-at
+   :terminated-at (if (= terminated-at "<nil>") nil terminated-at)
+   :age (parse-duration (now) (to-inst created-at))})
 
 (defn- format-jsonpath [fields]
   (let [formatted-fields (->> fields
@@ -75,9 +74,9 @@
 
 (defn- spark-apps
   ([state]
-   (if-let [state (and (some? state) (string/upper-case state))]
-     (filter (fn [app]
-               (= (:state app) state)) (spark-apps))
+   (if-let [given-state (and (some? state) (string/upper-case state))]
+     (filter (fn [{:keys [state]}]
+               (= state given-state)) (spark-apps))
      (spark-apps)))
   ([]
    (let [raw-apps (run-sh "kubectl" "get" "sparkapplication" (format-jsonpath
