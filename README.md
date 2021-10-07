@@ -3,7 +3,7 @@
 
 ## Installation
 
-Make sure you have [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl-macos/) install it via `brew`: `brew tap wanishing/sap` and then `brew install sap`.
+Make sure you have [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl-macos/) installed, then: `brew tap wanishing/sap` and `brew install sap`.
 
 ## Supported Actions
 
