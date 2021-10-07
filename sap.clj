@@ -40,7 +40,7 @@
       (doseq [row rows]
         (println (fmt-row row))))))
 
-(defn- spark-driver-app [id]
+(defn- driver [id]
   (format "%s-driver" id))
 
 (defn- now [] (java.time.Instant/now))
@@ -93,7 +93,7 @@
      apps)))
 
 (defn- spark-ui [{:keys [id]}]
-  (let [driver-app (spark-driver-app id)
+  (let [driver-app (driver id)
         start 4040
         end (+ start 10)
         forward-port (fn [port]
@@ -109,7 +109,7 @@
 
 (declare command-factory)
 
-(defn- reapply [id]
+(defn- reapply [{:keys [id]}]
   (let [app (json/parse-string (run-sh "kubectl" "get" "sparkapplication" id "-o" "json") true)
         fresh-metadata (select-keys (:metadata app) [:name :namespace])
         fresh-app (-> app
@@ -121,7 +121,6 @@
     (spit fname fresh-app)
     (println (format "Fresh app created at %s" fname))
     (delete {:id id})
-    (println "Old app deleted")
     (run-proc "kubectl" "apply" "-f" fname)))
 
 (def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods"})
@@ -141,11 +140,10 @@
                    :desc (fn [{:keys [id]}]
                            (print (run-sh "kubectl" "describe" "sparkapplication" id)))
 
-                   :reapply (fn [{:keys [id]}]
-                              (reapply id))
+                   :reapply reapply
 
                    :logs (fn [{:keys [id]}]
-                           (run-proc "kubectl" "logs" "-f" (spark-driver-app id)))
+                           (run-proc "kubectl" "logs" "-f" (driver id)))
 
                    :pods (fn [{:keys [id]}]
                            (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
@@ -210,9 +208,9 @@
 
 (defn- commands-runner [cmd options]
   (let [apps (find-apps-by options)
-        f (command-factory cmd)]
+        cmd (command-factory cmd)]
     (doseq [app apps]
-      (f app))
+      (cmd app))
     (println "Done.")))
 
 (defmulti command
