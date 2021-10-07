@@ -124,7 +124,7 @@
 
 (def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods"})
 
-(def commands-map {:delete (fn [{:keys [id]}]
+(def command-by-name {:delete (fn [{:keys [id]}]
                              (run-proc "kubectl" "delete" "sparkapplication" id))
 
                    :apps spark-apps
@@ -149,7 +149,7 @@
                              (run-proc "kubectl" "get" "pods" "-l" label)))})
 
 (defn- command-factory [cmd]
-  (get-in commands-map [cmd]))
+  (get-in command-by-name [cmd]))
 
 (defn- find-app [apps partial-id]
   (if-let [app (some (fn [{:keys [id] :as app}] (and (string/includes? id partial-id) app)) apps)]
