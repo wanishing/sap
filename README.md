@@ -1,9 +1,9 @@
 # sap
-`sap` is a kubectl wrapper cli to perform common actions against spark applications, running using [babashka](https://github.com/babashka/babashka).
+`sap` is a kubectl wrapper CLI to perform common actions against spark applications, running using [babashka](https://github.com/babashka/babashka).
 
 ## Installation
 
-Make sure you have [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl-macos/) install it via `brew`: `brew tap wanishing/sap` and then `brew install sap`.
+Make sure you have [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl-macos/) installed, then: `brew tap wanishing/sap` and `brew install sap`.
 
 ## Supported Actions
 
