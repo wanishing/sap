@@ -1,8 +1,9 @@
 #!/usr/bin/env bb
 (ns sap
   (:require [clojure.java.shell :refer [sh]]
-            [clojure.string :as string]
+            [clojure.string :as str]
             [cheshire.core :as json]
+            [clj-yaml.core :as yaml]
             [babashka.process :refer [process]]
             [clojure.tools.cli :refer [parse-opts]]))
 
@@ -10,7 +11,7 @@
 
 (defn- run-sh [& args]
   (when *verbose*
-    (println (string/join " " args)))
+    (println (str/join " " args)))
   (let [{:keys [out exit err]} (apply sh args)]
     (if (zero? exit)
       out
@@ -18,7 +19,7 @@
 
 (defn- run-proc [& args]
   (when *verbose*
-    (println (string/join " " args)))
+    (println (str/join " " args)))
   @(process args {:out :inherit})
   nil)
 
@@ -26,7 +27,7 @@
   (when (seq rows)
     (let [divider (apply str (repeat 4 " "))
           cols (keys (first rows))
-          headers (map #(string/upper-case (name %)) cols)
+          headers (map #(str/upper-case (name %)) cols)
           widths (map
                   (fn [k]
                     (apply max (count (str k)) (map #(count (str (get % k))) rows)))
@@ -56,11 +57,11 @@
     (->> units
          (filter (fn [[diff _]] (pos? diff)))
          (map (fn [[diff unit]] (format "%d%s" diff unit)))
-         (string/join))))
+         (str/join))))
 
 (defn- parse-app [[id created-at state terminated-at]]
   {:id id
-   :state state
+   :state (or state "UNKNOWN")
    :created-at created-at
    :terminated-at (if (= terminated-at "<nil>") nil terminated-at)
    :age (parse-duration (now) (to-inst created-at))})
@@ -68,13 +69,13 @@
 (defn- format-jsonpath [fields]
   (let [formatted-fields (->> fields
                               (map #(format "{%s}" %))
-                              (string/join "{\"\\t\"}"))
+                              (str/join "{\"\\t\"}"))
         jsonpath (format "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}" formatted-fields)]
     jsonpath))
 
 (defn- spark-apps
   ([state]
-   (if-let [given-state (and (some? state) (string/upper-case state))]
+   (if-let [given-state (and (some? state) (str/upper-case state))]
      (filter (fn [{:keys [state]}]
                (= state given-state)) (spark-apps))
      (spark-apps)))
@@ -85,13 +86,13 @@
                                                                ".status.applicationState.state"
                                                                ".status.terminationTime"]))
          apps (->> raw-apps
-                   (string/split-lines)
-                   (filter #(not (string/blank? %)))
-                   (map #(string/split % #"\t"))
+                   (str/split-lines)
+                   (filter #(not (str/blank? %)))
+                   (map #(str/split % #"\t"))
                    (map parse-app))]
      apps)))
 
-(defn- spark-ui [{:keys [id]}]
+(defn- spark-ui [{:keys [id]} _]
   (let [driver-app (driver id)
         start 4040
         end (+ start 10)
@@ -108,57 +109,67 @@
 
 (declare command-factory)
 
-(defn- reapply [{:keys [id]}]
-  (let [app (json/parse-string (run-sh "kubectl" "get" "sparkapplication" id "-o" "json") true)
+(defn- fresh-app [raw-app]
+  (let [app (yaml/parse-string raw-app)
         fresh-metadata (select-keys (:metadata app) [:name :namespace])
         fresh-app (-> app
                       (assoc :metadata fresh-metadata)
                       (dissoc :status)
-                      (json/generate-string))
-        fname (format "/tmp/%s.json" id)
+                      (yaml/generate-string))]
+    fresh-app))
+
+(defn- yaml [id]
+  (run-sh "kubectl" "get" "sparkapplication" id "-o" "yaml"))
+
+(defn- reapply [{:keys [id]} _]
+  (let [raw-app (yaml id)
+        fresh-app (fresh-app raw-app)
+        fname (format "/tmp/%s.yaml" id)
         delete (command-factory :delete)]
     (spit fname fresh-app)
     (println (format "Fresh app created at %s" fname))
-    (delete {:id id})
+    (delete {:id id} _)
     (run-proc "kubectl" "apply" "-f" fname)))
 
 (def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods"})
 
-(def command-by-name {:delete (fn [{:keys [id]}]
-                             (run-proc "kubectl" "delete" "sparkapplication" id))
+(def command-by-name {:delete (fn [{:keys [id]} _]
+                                (run-proc "kubectl" "delete" "sparkapplication" id))
 
-                   :apps spark-apps
+                      :apps spark-apps
 
-                   :states #{"FAILED" "COMPLETED"}
+                      :states #{"FAILED" "COMPLETED"}
 
-                   :ui spark-ui
+                      :ui spark-ui
 
-                   :get (fn [{:keys [id]}]
-                          (run-proc "kubectl" "get" "sparkapplication" id "-o" "yaml"))
+                      :get (fn [{:keys [id]} {:keys [fresh]}]
+                             (let [yaml (cond-> (yaml id)
+                                          (some? fresh) (fresh-app))]
+                               (print yaml)))
 
-                   :desc (fn [{:keys [id]}]
-                           (run-proc "kubectl" "describe" "sparkapplication" id))
+                      :desc (fn [{:keys [id]} _]
+                              (run-proc "kubectl" "describe" "sparkapplication" id))
 
-                   :reapply reapply
+                      :reapply reapply
 
-                   :logs (fn [{:keys [id]}]
-                           (run-proc "kubectl" "logs" "-f" (driver id)))
+                      :logs (fn [{:keys [id]} _]
+                              (run-proc "kubectl" "logs" "-f" (driver id)))
 
-                   :pods (fn [{:keys [id]}]
-                           (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
-                             (run-proc "kubectl" "get" "pods" "-l" label)))})
+                      :pods (fn [{:keys [id]} _]
+                              (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
+                                (run-proc "kubectl" "get" "pods" "-l" label)))})
 
 (defn- command-factory [cmd]
   (get-in command-by-name [cmd]))
 
 (defn- find-app [apps partial-id]
-  (if-let [app (some (fn [{:keys [id] :as app}] (and (string/includes? id partial-id) app)) apps)]
+  (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
     app
     (throw (ex-info "Failed to find app" {:id partial-id}))))
 
 (defn- fetch-executors []
   (let [parse (fn [extr]
-                (let [[pod, labels] (string/split extr #"\t")
+                (let [[pod, labels] (str/split extr #"\t")
                       app (-> labels
                               (json/parse-string true)
                               (:sparkoperator.k8s.io/app-name))]
@@ -166,7 +177,7 @@
         executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" (format-jsonpath
                                                                                   [".metadata.name"
                                                                                    ".metadata.labels"]))
-                       (string/split-lines)
+                       (str/split-lines)
                        (map parse))]
     executors))
 
@@ -196,27 +207,26 @@
         apps (cond->> apps
                (some? days) (filter older?)
                (some? prefix) (filter (fn [{:keys [id]}]
-                                        (string/starts-with? id prefix)))
+                                        (str/starts-with? id prefix)))
                (some? wide) (into [] @wide-info))]
     apps))
 
-(defn- command-runner [cmd options]
+(defn- run-one [cmd options]
   (let [app (first (find-apps-by options))
         cmd (command-factory cmd)]
-    (cmd app)))
+    (cmd app options)))
 
-(defn- commands-runner [cmd options]
+(defn- run-many [cmd options]
   (let [apps (find-apps-by options)
         cmd (command-factory cmd)]
     (doseq [app apps]
-      (cmd app))
-    (println "Done.")))
+      (cmd app options))))
 
 (defmulti command
   (fn [{:keys [action]}] (keyword action)))
 
 (defmethod command :delete [{:keys [args]}]
-  (commands-runner :delete args))
+  (run-many :delete args))
 
 (defmethod command :cleanup [{:keys [args]}]
   (doseq [state (command-factory :states)]
@@ -224,28 +234,29 @@
     (command {:action :delete :args (assoc args :state state)})))
 
 (defmethod command :ls [{:keys [args]}]
-  (->> (find-apps-by args)
-       (sort-by (juxt :id :created-at))
-       (map #(dissoc % :created-at :terminated-at))
-       (print-apps)))
+  (let [invisble-fields [:created-at :terminated-at]]
+    (->> (find-apps-by args)
+         (sort-by (juxt :id :created-at))
+         (map #(reduce (fn [app key] (dissoc app key)) % invisble-fields))
+         (print-apps))))
 
 (defmethod command :pods [{:keys [args]}]
-  (command-runner :pods args))
+  (run-many :pods args))
 
 (defmethod command :ui [{:keys [args]}]
-  (command-runner :ui args))
+  (run-one :ui args))
 
 (defmethod command :get [{:keys [args]}]
-  (command-runner :get args))
+  (run-many :get args))
 
 (defmethod command :desc [{:keys [args]}]
-  (command-runner :desc args))
+  (run-many :desc args))
 
 (defmethod command :logs [{:keys [args]}]
-  (command-runner :logs args))
+  (run-one :logs args))
 
 (defmethod command :reapply [{:keys [args]}]
-  (commands-runner :reapply args))
+  (run-many :reapply args))
 
 (def cli-options
   [["-s" "--state STATE" "State of application"]
@@ -254,6 +265,7 @@
     :parse-fn #(Integer/parseInt %)
     :default 0]
    ["-p" "--prefix PREFIX" "Prefix of application id"]
+   [nil "--fresh"]
    ["-w" "--wide"]
    ["-v" "--verbose"]
    ["-h" "--help"]])
@@ -277,11 +289,11 @@
         "  pods          display all pods associated to application"
         "  reapply       re-apply application (keeping the same id)"
         ""]
-       (string/join \newline)))
+       (str/join \newline)))
 
 (defn- error-msg [errors]
   (str "The following errors occurred while parsing your command:\n\n"
-       (string/join \newline errors)))
+       (str/join \newline errors)))
 
 (defn- validate-args
   [args]
