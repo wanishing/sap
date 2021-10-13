@@ -4,6 +4,8 @@
             [clojure.string :as str]
             [cheshire.core :as json]
             [clj-yaml.core :as yaml]
+            [clojure.core.async :as async]
+            [babashka.curl :as curl]
             [babashka.process :refer [process]]
             [clojure.tools.cli :refer [parse-opts]]))
 
@@ -23,7 +25,7 @@
   @(process args {:out :inherit})
   nil)
 
-(defn- print-apps [rows]
+(defn- print-rows [rows]
   (when (seq rows)
     (let [divider (apply str (repeat 4 " "))
           cols (keys (first rows))
@@ -92,19 +94,98 @@
                    (map parse-app))]
      apps)))
 
+(defn- forward-port [driver port]
+  (println "Port forwarding" driver (format "to http://localhost:%s..." port))
+  (run-sh "kubectl" "port-forward" driver (format "%s:4040" port)))
+
+(defn- busy? [port]
+  (= (:exit (sh "lsof" "-i" (format ":%d" port))) 0))
+
 (defn- spark-ui [{:keys [id]} _]
   (let [driver-app (driver id)
         start 4040
-        end (+ start 10)
-        forward-port (fn [port]
-                       (println "Port forwarding" driver-app (format "to http://localhost:%s..." port))
-                       (run-sh "kubectl" "port-forward" driver-app (format "%s:4040" port)))
-        busy? (fn [port]
-                (= (:exit (sh "lsof" "-i" (format ":%d" port))) 0))]
+        end (+ start 10)]
     (loop [port start]
       (when (< port end)
         (if (not (busy? port))
-          (forward-port port)
+          (forward-port driver-app port)
+          (recur (inc port)))))))
+
+(defn- get-by [api]
+  (let [headers {"Accept" "application/json"}
+        resp (curl/get api {:headers headers
+                            :throw false})
+        snakecase (fn [s]
+                    (let [end (count s)
+                          appender (fn [idx]
+                                     (if (java.lang.Character/isUpperCase (nth s idx))
+                                       (str "-" (str/lower-case (nth s idx)))
+                                       (nth s idx)))]
+                      (loop [curr 0
+                             acc ""]
+                        (if (= end curr)
+                          acc
+                          (recur (inc curr) (str acc (appender curr)))))))
+        body (when (= (:status resp) 200)
+               (-> resp
+                   :body
+                   (json/parse-string (fn [k] (keyword (snakecase k))))))]
+    (when *verbose*
+      (println "Response for" api)
+      (println body))
+    body))
+
+(defn- fetch-metrics [port]
+  (let [endpoint (format "localhost:%s" port)
+        api (str endpoint "/api/v1/applications")
+        {:keys [id]} (first (get-by api))
+        stages-api (str endpoint (format "/api/v1/applications/%s/stages?status=active" id))
+        {:keys [stage-id attempt-id]} (first (get-by stages-api))
+        quantiles [0.01 0.25 0.5 0.75 0.99]
+        metrics-api (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s" id stage-id attempt-id (str/join "," quantiles)))
+        {:keys [executor-run-time jvm-gc-time]
+         {:keys [read-bytes read-records]} :shuffle-read-metrics} (get-by metrics-api)]
+    (map-indexed (fn [idx quantile]
+                   (let [nth #(nth % idx)]
+                     {:quantile quantile
+                      :duration (nth executor-run-time)
+                      :gc-time (nth jvm-gc-time)
+                      :shuffle-read-bytes (nth read-bytes)
+                      :shuffle-records (nth read-records)})) quantiles)))
+
+(defmacro forever [& body]
+  `(while true ~@body (Thread/sleep (* 3 1000))))
+
+(defn- metrics [id]
+  (let [driver-app (driver id)
+        start 4040
+        end (+ start 10)]
+    (loop [port start]
+      (when (< port end)
+        (if (not (busy? port))
+          (do
+            (async/thread (forward-port driver-app port))
+            (let [print-rows (fn [rows]
+                               (when (seq rows)
+                                 (let [divider (apply str (repeat 4 " "))
+                                       cols (keys (first rows))
+                                       headers (map #(str/upper-case (name %)) cols)
+                                       widths (map
+                                               (fn [k]
+                                                 (apply max (count (str k)) (map #(count (str (get % k))) rows)))
+                                               cols)
+                                       fmts (map #(str "%-" % "s") widths)
+                                       fmt-row (fn [row]
+                                                 (apply str (interpose divider
+                                                                       (for [[col fmt] (map vector (map #(get row %) cols) fmts)]
+                                                                         (format fmt (str col))))))]
+                                   (println (fmt-row (zipmap cols headers)))
+                                   (doseq [row rows]
+                                     (println (fmt-row row))))))]
+              (forever
+               (print-rows (fetch-metrics port))
+               (println "----------")
+               (flush))))
           (recur (inc port)))))))
 
 (declare command-factory)
@@ -131,7 +212,7 @@
     (delete {:id id} _)
     (run-proc "kubectl" "apply" "-f" fname)))
 
-(def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods"})
+(def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods" "metrics"})
 
 (def command-by-name {:delete (fn [{:keys [id]} _]
                                 (run-proc "kubectl" "delete" "sparkapplication" id))
@@ -157,7 +238,10 @@
 
                       :pods (fn [{:keys [id]} _]
                               (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
-                                (run-proc "kubectl" "get" "pods" "-l" label)))})
+                                (run-proc "kubectl" "get" "pods" "-l" label)))
+
+                      :metrics (fn [{:keys [id]} _]
+                                 (metrics id))})
 
 (defn- command-factory [cmd]
   (get-in command-by-name [cmd]))
@@ -183,17 +267,17 @@
 
 (def wide-info
   (delay
-    (let [add-executors (fn [executors {:keys [id] :as app}]
-                          (let [pods (filter #(= id (:app %)) executors)]
-                            (assoc app :executors (count pods))))
-          add-duration (fn [{:keys [age created-at terminated-at] :as app}]
-                         (let [duration (if (some? terminated-at)
-                                          (parse-duration (to-inst terminated-at) (to-inst created-at))
-                                          age)]
-                           (assoc app :duration duration)))]
-      (comp
-       (map add-duration)
-       (map (partial add-executors (fetch-executors)))))))
+   (let [add-executors (fn [executors {:keys [id] :as app}]
+                         (let [pods (filter #(= id (:app %)) executors)]
+                           (assoc app :executors (count pods))))
+         add-duration (fn [{:keys [age created-at terminated-at] :as app}]
+                        (let [duration (if (some? terminated-at)
+                                         (parse-duration (to-inst terminated-at) (to-inst created-at))
+                                         age)]
+                          (assoc app :duration duration)))]
+     (comp
+      (map add-duration)
+      (map (partial add-executors (fetch-executors)))))))
 
 (defn- find-apps-by
   [{:keys [state id days prefix wide]}]
@@ -238,7 +322,7 @@
     (->> (find-apps-by args)
          (sort-by (juxt :id :created-at))
          (map #(reduce (fn [app key] (dissoc app key)) % invisble-fields))
-         (print-apps))))
+         (print-rows))))
 
 (defmethod command :pods [{:keys [args]}]
   (run-many :pods args))
@@ -257,6 +341,9 @@
 
 (defmethod command :reapply [{:keys [args]}]
   (run-many :reapply args))
+
+(defmethod command :metrics [{:keys [args]}]
+  (run-one :metrics args))
 
 (def cli-options
   [["-s" "--state STATE" "State of application"]
