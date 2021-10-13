@@ -95,7 +95,6 @@
      apps)))
 
 (defn- forward-port [driver port]
-  (println "Port forwarding" driver (format "to http://localhost:%s..." port))
   (run-sh "kubectl" "port-forward" driver (format "%s:4040" port)))
 
 (defn- busy? [port]
@@ -108,7 +107,9 @@
     (loop [port start]
       (when (< port end)
         (if (not (busy? port))
-          (forward-port driver-app port)
+          (do
+            (println "Port forwarding" driver-app (format "to http://localhost:%s..." port))
+            (forward-port driver-app port))
           (recur (inc port)))))))
 
 (defn- get-by [api]
@@ -139,7 +140,7 @@
   (let [endpoint (format "localhost:%s" port)
         api (str endpoint "/api/v1/applications")
         {:keys [id]} (first (get-by api))
-        stages-api (str endpoint (format "/api/v1/applications/%s/stages?status=active" id))
+        stages-api (str endpoint (format "/api/v1/applications/%s/stages?status=complete" id))
         {:keys [stage-id attempt-id]} (first (get-by stages-api))
         quantiles [0.01 0.25 0.5 0.75 0.99]
         metrics-api (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s" id stage-id attempt-id (str/join "," quantiles)))
@@ -165,26 +166,9 @@
         (if (not (busy? port))
           (do
             (async/thread (forward-port driver-app port))
-            (let [print-rows (fn [rows]
-                               (when (seq rows)
-                                 (let [divider (apply str (repeat 4 " "))
-                                       cols (keys (first rows))
-                                       headers (map #(str/upper-case (name %)) cols)
-                                       widths (map
-                                               (fn [k]
-                                                 (apply max (count (str k)) (map #(count (str (get % k))) rows)))
-                                               cols)
-                                       fmts (map #(str "%-" % "s") widths)
-                                       fmt-row (fn [row]
-                                                 (apply str (interpose divider
-                                                                       (for [[col fmt] (map vector (map #(get row %) cols) fmts)]
-                                                                         (format fmt (str col))))))]
-                                   (println (fmt-row (zipmap cols headers)))
-                                   (doseq [row rows]
-                                     (println (fmt-row row))))))]
-              (forever
-               (print-rows (fetch-metrics port))
-               (println "----------")
+            (forever
+             (let [metrics (with-out-str (print-rows (fetch-metrics port)))]
+               (printf "\033[H%s" metrics)
                (flush))))
           (recur (inc port)))))))
 
@@ -408,4 +392,3 @@
         (command {:action action :args options})))))
 
 (run *command-line-args*)
-
