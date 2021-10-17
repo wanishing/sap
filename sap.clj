@@ -11,6 +11,13 @@
 
 (def ^:dynamic *verbose* nil)
 
+(defmacro when-let*
+  ([bindings & body]
+   (if (seq bindings)
+     `(when-let [~(first bindings) ~(second bindings)]
+        (when-let* ~(drop 2 bindings) ~@body))
+     `(do ~@body))))
+
 (defn- run-sh [& args]
   (when *verbose*
     (println (str/join " " args)))
@@ -136,26 +143,143 @@
       (println body))
     body))
 
-(defn- fetch-metrics [port]
-  (let [endpoint (format "localhost:%s" port)
-        api (str endpoint "/api/v1/applications")
-        {:keys [id]} (first (get-by api))
-        stages-api (str endpoint (format "/api/v1/applications/%s/stages?status=complete" id))
-        {:keys [stage-id attempt-id]} (first (get-by stages-api))
-        quantiles [0.01 0.25 0.5 0.75 0.99]
-        metrics-api (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s" id stage-id attempt-id (str/join "," quantiles)))
+(defn- parse-millis [millis]
+  (if (or (nil? millis) (zero? millis))
+    "0.0ms"
+    (let [inst (.atZone
+                (java.time.Instant/ofEpochMilli millis)
+                java.time.ZoneOffset/UTC)
+          units [[(.getHour inst) "h"]
+                 [(.getMinute inst) "m"]
+                 [(.getSecond inst) "s"]
+                 [(int (mod (Math/round millis) 1000)) "ms"]]
+          res (->> units
+                   (filter (fn [[val _]] (pos? val)))
+                   (map (fn [[val unit]] (format "%d%s" val unit)))
+                   (str/join))]
+      res)))
+
+(defn- parse-bytes [bytes]
+  (if (some? bytes)
+    (let [units [[(double (/ bytes (* 1024 1024 1024))) "GiB"]
+                 [(double (/ bytes (* 1024 1024))) "MiB"]
+                 [(double (/ bytes 1024)) "KiB"]]
+          [val unit] (some (fn [[val unit]]
+                             (and (>= val 1) [val unit])) units)
+          res (format "%.1f%s" val unit)]
+      res)
+    0.0))
+
+(defn- fetch-app [endpoint]
+  (let [api (str endpoint "/api/v1/applications")
+        {:keys [id]} (first (get-by api))]
+    id))
+
+(defn- fetch-stage [endpoint id]
+  (let [stages-api (str endpoint (format "/api/v1/applications/%s/stages?status=active" id))
+        stages (get-by stages-api)]
+    (when (seq stages)
+      (let [{:keys [stage-id
+                    attempt-id
+                    num-tasks
+                    num-failed-tasks
+                    num-active-tasks
+                    num-complete-tasks
+                    input-bytes
+                    input-records
+                    shuffle-write-bytes
+                    shuffle-write-records
+                    description
+                    name]} (first stages)]
+        {:app-id id
+         :stage-id stage-id
+         :attempt-id attempt-id
+         :description (or (and description (first (str/split-lines description))) name)
+         :input-size (parse-bytes input-bytes)
+         :input-records input-records
+         :shuffle-write-size (parse-bytes shuffle-write-bytes)
+         :shuffle-write-records shuffle-write-records
+         :tasks {:succeeded num-complete-tasks
+                 :failed num-failed-tasks
+                 :active num-active-tasks
+                 :total num-tasks}}))))
+
+(defn- fetch-metrics [endpoint app-id stage-id attempt-id]
+  (let [quantiles [0.01 0.25 0.5 0.75 0.99]
+        quantiles-names ["Min" "25th" "Median" "75th" "Max"]
+        metrics-api (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s"
+                                          app-id
+                                          stage-id
+                                          attempt-id
+                                          (str/join "," quantiles)))
         {:keys [executor-run-time jvm-gc-time]
-         {:keys [read-bytes read-records]} :shuffle-read-metrics} (get-by metrics-api)]
-    (map-indexed (fn [idx quantile]
-                   (let [nth #(nth % idx)]
-                     {:quantile quantile
-                      :duration (nth executor-run-time)
-                      :gc-time (nth jvm-gc-time)
-                      :shuffle-read-bytes (nth read-bytes)
-                      :shuffle-records (nth read-records)})) quantiles)))
+         {:keys [bytes-read records-read]} :input-metrics
+         {:keys [bytes-written records-written]} :output-metrics
+         {:keys [read-bytes read-records]} :shuffle-read-metrics
+         {:keys [write-bytes write-records]} :shuffle-write-metrics} (get-by metrics-api)
+        metrics (map-indexed (fn [idx quantile]
+                               (let [nth #(nth % idx)
+                                     bytes-per-records (fn [part total]
+                                                         (let [t (int (nth total))
+                                                               p (nth part)]
+                                                           (if (every? pos? [t p])
+                                                             (format "%s / %d" (parse-bytes p) t)
+                                                             "")))]
+                                 {:percentile quantile
+                                  :duration (parse-millis (nth executor-run-time))
+                                  :gc-time (parse-millis (nth jvm-gc-time))
+                                  :input (bytes-per-records bytes-read records-read)
+                                  :output (bytes-per-records bytes-written records-written)
+                                  :shuffle-read (bytes-per-records read-bytes read-records)
+                                  :shuffle-write (bytes-per-records write-bytes write-records)}))
+                             quantiles-names)]
+    metrics))
+
+(defn- fetch-state [port]
+  (when-let* [endpoint (format "localhost:%s" port)
+              app-id (fetch-app endpoint)
+              {:keys [stage-id attempt-id] :as stage} (fetch-stage endpoint app-id)
+              metrics (fetch-metrics
+                       endpoint
+                       app-id
+                       stage-id
+                       attempt-id)]
+    [stage metrics]))
+
 
 (defmacro forever [& body]
-  `(while true ~@body (Thread/sleep (* 3 1000))))
+  `(while true ~@body (Thread/sleep 500)))
+
+(defn- print-metrics [{:keys [app-id
+                              stage-id
+                              attempt-id
+                              description
+                              input-size
+                              input-records
+                              shuffle-write-size
+                              shuffle-write-records]
+                       {:keys [total active failed succeeded]} :tasks} metrics]
+  (println "Application:" (str app-id))
+  (println "Description:" description)
+  (println "Stage:" (str stage-id))
+  (println "Attempt:" (str attempt-id))
+  (println (format "Input Size / Records: %s/%s" input-size input-records))
+  (println (format "Shuffle Write Size / Records: %s/%s" shuffle-write-size shuffle-write-records))
+  (println "Tasks:")
+  (println (format "\tActive: %s" (str active)))
+  (println (format "\tSucceeded/Total: %s/%s" (str succeeded) (str total)))
+  (println (format "\tFailed: %s" (str failed)))
+  (println)
+  (println (with-out-str (print-rows metrics))))
+
+(defn- thinking... []
+  (doseq [c ["-" "\\" "|" "/"]]
+    (flush)
+    (printf "\r%s" c)
+    (Thread/sleep 100)))
+
+(defn- clean-terminal []
+  (println "\033[H\033[2J"))
 
 (defn- metrics [id]
   (let [driver-app (driver id)
@@ -166,10 +290,15 @@
         (if (not (busy? port))
           (do
             (async/thread (forward-port driver-app port))
+            (clean-terminal)
             (forever
-             (let [metrics (with-out-str (print-rows (fetch-metrics port)))]
-               (printf "\033[H%s" metrics)
-               (flush))))
+             (let [[app metrics] (fetch-state port)]
+               (if (and app metrics)
+                 (do
+                   (clean-terminal)
+                   (println (format "Displaying metrics for %s (localhost:%s):" id port))
+                   (print-metrics app metrics))
+                 (thinking...)))))
           (recur (inc port)))))))
 
 (declare command-factory)
