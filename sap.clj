@@ -14,13 +14,6 @@
 
 (def ^:dynamic *verbose* nil)
 
-(defmacro when-let*
-  ([bindings & body]
-   (if (seq bindings)
-     `(when-let [~(first bindings) ~(second bindings)]
-        (when-let* ~(drop 2 bindings) ~@body))
-     `(do ~@body))))
-
 (defn- run-sh [& args]
   (when *verbose*
     (println (str/join " " args)))
@@ -155,6 +148,8 @@
                (-> resp
                    :body
                    (json/parse-string (comp keyword snakecase))))]
+    (when *verbose*
+      (println api "=>" (json/parse-string body {:pretty true})))
     body))
 
 (defn- parse-millis [millis]
@@ -175,7 +170,8 @@
   (if (some? bytes)
     (let [units [[(double (/ bytes (* 1024 1024 1024))) "GiB"]
                  [(double (/ bytes (* 1024 1024))) "MiB"]
-                 [(double (/ bytes 1024)) "KiB"]]
+                 [(double (/ bytes 1024)) "KiB"]
+                 [bytes "B"]]
           [val unit] (some (fn [[val unit]]
                              (and (>= val 1) [val unit])) units)
           res (format "%.1f%s" val unit)]
@@ -189,7 +185,6 @@
 
 (defn- bytes-per-records [bytes records]
   (when (every? pos? [bytes records])
-;    (println bytes)
     (format "%s/%s" (parse-bytes bytes) (cl-format nil "~:d" (long records)))))
 
 (defn- fetch-metrics [endpoint app-id stage-id attempt-id]
@@ -314,9 +309,19 @@
      app
      (throw (ex-info "Failed to find app" {:id partial-id})))))
 
-(defn- running? [id]
-  (let [{:keys [state]} (find-app id)]
-    (= state "RUNNING")))
+(defn- running?
+  ([id]
+   (let [{:keys [state]} (find-app id)]
+     (= state "RUNNING")))
+  ([id fetch-stage]
+   (let [running? (running? id)
+         active? (let [non-active 10]
+                   (loop [trial 0]
+                     (cond
+                       (some? (fetch-stage)) true
+                       (>= trial non-active) false
+                       :else (recur (inc trial)))))]
+     (and running? active?))))
 
 (defn- metrics [id]
   (when (running? id)
@@ -325,10 +330,11 @@
       (async/thread (forward-port driver-app port))
       (wait/wait-for-port "localhost" port)
       (let [endpoint (localhost port)
-            app-id (fetch-app endpoint)]
-        (while (running? id)
+            app-id (fetch-app endpoint)
+            fetch-stage (partial fetch-stage endpoint app-id)]
+        (while (running? id fetch-stage)
           (let [{:keys [stage-id
-                        attempt-id] :as stage} (fetch-stage endpoint app-id)
+                        attempt-id] :as stage} (fetch-stage)
                 metrics (fetch-metrics endpoint app-id stage-id attempt-id)]
             (when (some? stage)
               (clean-terminal)
@@ -336,7 +342,7 @@
               (println)
               (print-metrics stage metrics)))
           (Thread/sleep 1000))))
-    (println (format "Application %s is not running" id))))
+    (println (format "Application %s has no active stage" id))))
 
 (defn- fresh-app [raw-app]
   (let [app (yaml/parse-string raw-app)
@@ -518,6 +524,7 @@
         "  logs          alias for `kubectl logs` command"
         "  pods          display all pods associated to application"
         "  reapply       re-apply application (keeping the same id)"
+        "  metrics       display metrics for running stage"
         ""]
        (str/join \newline)))
 
