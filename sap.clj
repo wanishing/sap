@@ -318,14 +318,6 @@
   (let [{:keys [state]} (find-app id)]
     (= state "RUNNING")))
 
-(defn- waiting-message [msg]
-  (clean-terminal)
-  (printf msg)
-  (doseq [c (repeat 10 ".")]
-    (flush)
-    (printf "%s" c)
-    (Thread/sleep 100)))
-
 (defn- metrics [id]
   (when (running? id)
     (let [driver-app (driver id)
