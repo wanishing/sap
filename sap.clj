@@ -55,16 +55,16 @@
 
 (defn- at-utc [inst] (.atZone inst java.time.ZoneOffset/UTC))
 
-(defn- parse-duration [start end]
+(defn- duration [start end]
   (let [diff (java.time.Duration/between end start)
         units [[(.toDays diff) "d"]
                [(mod (.toHours diff) 24) "h"]
                [(mod (.toMinutes diff) 60) "m"]
                [(mod (.toSeconds diff) 60) "s"]]
-        result     (->> units
-                        (filter (fn [[diff _]] (pos? diff)))
-                        (map (fn [[diff unit]] (format "%d%s" diff unit)))
-                        (str/join))]
+        result (->> units
+                    (filter (fn [[diff _]] (pos? diff)))
+                    (map (fn [[diff unit]] (format "%d%s" diff unit)))
+                    (str/join))]
     result))
 
 (defn- parse-app [[id created-at state terminated-at]]
@@ -72,9 +72,9 @@
    :state (or state "UNKNOWN")
    :created-at created-at
    :terminated-at (if (= terminated-at "<nil>") nil terminated-at)
-   :age (parse-duration (now) (to-inst created-at))})
+   :age (duration (now) (to-inst created-at))})
 
-(defn- format-jsonpath [fields]
+(defn- jsonpath [fields]
   (let [formatted-fields (->> fields
                               (map #(format "{%s}" %))
                               (str/join "{\"\\t\"}"))
@@ -88,7 +88,7 @@
                (= state given-state)) (spark-apps))
      (spark-apps)))
   ([]
-   (let [raw-apps (run-sh "kubectl" "get" "sparkapplication" (format-jsonpath
+   (let [raw-apps (run-sh "kubectl" "get" "sparkapplication" (jsonpath
                                                               [".metadata.name"
                                                                ".metadata.creationTimestamp"
                                                                ".status.applicationState.state"
@@ -132,7 +132,7 @@
   (let [headers {"Accept" "application/json"}
         resp (curl/get api {:headers headers
                             :throw false})
-        snakecase (fn [s]
+        ->snakecase (fn [s]
                     (let [end (count s)
                           appender (fn [idx]
                                      (let [c (nth s idx)]
@@ -147,12 +147,12 @@
         body (when (= (:status resp) 200)
                (-> resp
                    :body
-                   (json/parse-string (comp keyword snakecase))))]
+                   (json/parse-string (comp keyword ->snakecase))))]
     (when *verbose*
       (println api "=>" (json/parse-string body {:pretty true})))
     body))
 
-(defn- parse-millis [millis]
+(defn- ->millis [millis]
   (if (or (nil? millis) (zero? millis))
     "0.0ms"
     (let [inst (at-utc (java.time.Instant/ofEpochMilli millis))
@@ -166,7 +166,7 @@
                    (str/join))]
       res)))
 
-(defn- parse-bytes [bytes]
+(defn- ->bytes [bytes]
   (if (some? bytes)
     (let [units [[(double (/ bytes (* 1024 1024 1024))) "GiB"]
                  [(double (/ bytes (* 1024 1024))) "MiB"]
@@ -185,7 +185,7 @@
 
 (defn- bytes-per-records [bytes records]
   (when (every? pos? [bytes records])
-    (format "%s/%s" (parse-bytes bytes) (cl-format nil "~:d" (long records)))))
+    (format "%s/%s" (->bytes bytes) (cl-format nil "~:d" (long records)))))
 
 (defn- fetch-metrics [endpoint app-id stage-id attempt-id]
   (let [quantiles [0.01 0.25 0.5 0.75 0.99]
@@ -204,8 +204,8 @@
                   (map-indexed (fn [idx quantile]
                                  (let [nth #(nth % idx)]
                                    {:percentile quantile
-                                    :duration (parse-millis (nth executor-run-time))
-                                    :gc-time (parse-millis (nth jvm-gc-time))
+                                    :duration (->millis (nth executor-run-time))
+                                    :gc-time (->millis (nth jvm-gc-time))
                                     :input (bytes-per-records (nth bytes-read) (nth records-read))
                                     :output (bytes-per-records (nth bytes-written) (nth records-written))
                                     :shuffle-read (bytes-per-records (nth read-bytes) (nth read-records))
@@ -248,7 +248,7 @@
                                                                        "yyyy-MM-dd'T'HH:mm:ss.SSSz"))
                                    sbt (at-utc (.toInstant sbt))
                                    now (at-utc (now))]
-                               (parse-duration now sbt))
+                               (duration now sbt))
                    :description (or (and description (first (str/split-lines description))) name)
                    :input (bytes-per-records input-bytes input-records)
                    :output (bytes-per-records output-bytes output-records)
@@ -407,7 +407,7 @@
                               (json/parse-string true)
                               (:sparkoperator.k8s.io/app-name))]
                   {:executor pod :app app}))
-        executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" (format-jsonpath
+        executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" (jsonpath
                                                                                   [".metadata.name"
                                                                                    ".metadata.labels"]))
                        (str/split-lines)
@@ -421,7 +421,7 @@
                            (assoc app :executors (count pods))))
          add-duration (fn [{:keys [age created-at terminated-at] :as app}]
                         (let [duration (if (some? terminated-at)
-                                         (parse-duration (to-inst terminated-at) (to-inst created-at))
+                                         (duration (to-inst terminated-at) (to-inst created-at))
                                          age)]
                           (assoc app :duration duration)))]
      (comp
