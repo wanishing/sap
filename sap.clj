@@ -2,12 +2,15 @@
 (ns sap
   (:require [clojure.java.shell :refer [sh]]
             [clojure.string :as str]
+            [clojure.pprint :refer [cl-format]]
             [cheshire.core :as json]
             [clj-yaml.core :as yaml]
             [clojure.core.async :as async]
+            [babashka.wait :as wait]
             [babashka.curl :as curl]
             [babashka.process :refer [process]]
-            [clojure.tools.cli :refer [parse-opts]]))
+            [clojure.tools.cli :refer [parse-opts]])
+  (:import [java.net Socket SocketException]))
 
 (def ^:dynamic *verbose* nil)
 
@@ -57,16 +60,19 @@
 
 (defn- to-inst [s] (java.time.Instant/parse s))
 
+(defn- at-utc [inst] (.atZone inst java.time.ZoneOffset/UTC))
+
 (defn- parse-duration [start end]
   (let [diff (java.time.Duration/between end start)
         units [[(.toDays diff) "d"]
                [(mod (.toHours diff) 24) "h"]
                [(mod (.toMinutes diff) 60) "m"]
-               [(mod (.toSeconds diff) 60) "s"]]]
-    (->> units
-         (filter (fn [[diff _]] (pos? diff)))
-         (map (fn [[diff unit]] (format "%d%s" diff unit)))
-         (str/join))))
+               [(mod (.toSeconds diff) 60) "s"]]
+        result     (->> units
+                        (filter (fn [[diff _]] (pos? diff)))
+                        (map (fn [[diff unit]] (format "%d%s" diff unit)))
+                        (str/join))]
+    result))
 
 (defn- parse-app [[id created-at state terminated-at]]
   {:id id
@@ -105,19 +111,29 @@
   (run-sh "kubectl" "port-forward" driver (format "%s:4040" port)))
 
 (defn- busy? [port]
-  (= (:exit (sh "lsof" "-i" (format ":%d" port))) 0))
+  (try
+    (nil? (.close (Socket. "localhost" port)))
+    (catch SocketException _
+      false)))
+
+(defn- find-free-port []
+  (let [start 4040
+        end (+ start 50)]
+    (loop [port start]
+      (cond
+        (>= port end) nil
+        (not (busy? port)) port
+        :else (recur (inc port))))))
 
 (defn- spark-ui [{:keys [id]} _]
   (let [driver-app (driver id)
-        start 4040
-        end (+ start 10)]
-    (loop [port start]
-      (when (< port end)
-        (if (not (busy? port))
-          (do
-            (println "Port forwarding" driver-app (format "to http://localhost:%s..." port))
-            (forward-port driver-app port))
-          (recur (inc port)))))))
+        port (find-free-port)]
+    (println "Port forwarding" driver-app
+             (format "to http://localhost:%s..." port))
+    (forward-port driver-app port)))
+
+(defn- localhost [port]
+  (format "localhost:%s" port))
 
 (defn- get-by [api]
   (let [headers {"Accept" "application/json"}
@@ -126,9 +142,10 @@
         snakecase (fn [s]
                     (let [end (count s)
                           appender (fn [idx]
-                                     (if (java.lang.Character/isUpperCase (nth s idx))
-                                       (str "-" (str/lower-case (nth s idx)))
-                                       (nth s idx)))]
+                                     (let [c (nth s idx)]
+                                       (if (java.lang.Character/isUpperCase c)
+                                         (str "-" (str/lower-case c))
+                                         c)))]
                       (loop [curr 0
                              acc ""]
                         (if (= end curr)
@@ -137,18 +154,13 @@
         body (when (= (:status resp) 200)
                (-> resp
                    :body
-                   (json/parse-string (fn [k] (keyword (snakecase k))))))]
-    (when *verbose*
-      (println "Response for" api)
-      (println body))
+                   (json/parse-string (comp keyword snakecase))))]
     body))
 
 (defn- parse-millis [millis]
   (if (or (nil? millis) (zero? millis))
     "0.0ms"
-    (let [inst (.atZone
-                (java.time.Instant/ofEpochMilli millis)
-                java.time.ZoneOffset/UTC)
+    (let [inst (at-utc (java.time.Instant/ofEpochMilli millis))
           units [[(.getHour inst) "h"]
                  [(.getMinute inst) "m"]
                  [(.getSecond inst) "s"]
@@ -175,6 +187,43 @@
         {:keys [id]} (first (get-by api))]
     id))
 
+(defn- bytes-per-records [bytes records]
+  (when (every? pos? [bytes records])
+;    (println bytes)
+    (format "%s/%s" (parse-bytes bytes) (cl-format nil "~:d" (long records)))))
+
+(defn- fetch-metrics [endpoint app-id stage-id attempt-id]
+  (let [quantiles [0.01 0.25 0.5 0.75 0.99]
+        quantiles-names ["Min" "25th" "Median" "75th" "Max"]
+        metrics-api (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s"
+                                          app-id
+                                          stage-id
+                                          attempt-id
+                                          (str/join "," quantiles)))
+        {:keys [executor-run-time jvm-gc-time] :as response
+         {:keys [bytes-read records-read]} :input-metrics
+         {:keys [bytes-written records-written]} :output-metrics
+         {:keys [read-bytes read-records]} :shuffle-read-metrics
+         {:keys [write-bytes write-records]} :shuffle-write-metrics} (get-by metrics-api)
+        metrics (if (some? response)
+                  (map-indexed (fn [idx quantile]
+                                 (let [nth #(nth % idx)]
+                                   {:percentile quantile
+                                    :duration (parse-millis (nth executor-run-time))
+                                    :gc-time (parse-millis (nth jvm-gc-time))
+                                    :input (bytes-per-records (nth bytes-read) (nth records-read))
+                                    :output (bytes-per-records (nth bytes-written) (nth records-written))
+                                    :shuffle-read (bytes-per-records (nth read-bytes) (nth read-records))
+                                    :shuffle-write (bytes-per-records (nth write-bytes) (nth write-records))}))
+                               quantiles-names)
+                  [])
+        nullable-fields (filter (fn [field]
+                                  (every? nil? (map field metrics)))
+                                [:input :output :shuffle-read :shuffle-write])
+        metrics (map (fn [m]
+                       (apply (partial dissoc m) nullable-fields )) metrics)]
+    metrics))
+
 (defn- fetch-stage [endpoint id]
   (let [stages-api (str endpoint (format "/api/v1/applications/%s/stages?status=active" id))
         stages (get-by stages-api)]
@@ -187,121 +236,115 @@
                     num-complete-tasks
                     input-bytes
                     input-records
+                    output-bytes
+                    output-records
                     shuffle-write-bytes
                     shuffle-write-records
+                    shuffle-read-bytes
+                    shuffle-read-records
+                    submission-time
                     description
-                    name]} (first stages)]
-        {:app-id id
-         :stage-id stage-id
-         :attempt-id attempt-id
-         :description (or (and description (first (str/split-lines description))) name)
-         :input-size (parse-bytes input-bytes)
-         :input-records input-records
-         :shuffle-write-size (parse-bytes shuffle-write-bytes)
-         :shuffle-write-records shuffle-write-records
-         :tasks {:succeeded num-complete-tasks
-                 :failed num-failed-tasks
-                 :active num-active-tasks
-                 :total num-tasks}}))))
-
-(defn- fetch-metrics [endpoint app-id stage-id attempt-id]
-  (let [quantiles [0.01 0.25 0.5 0.75 0.99]
-        quantiles-names ["Min" "25th" "Median" "75th" "Max"]
-        metrics-api (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s"
-                                          app-id
-                                          stage-id
-                                          attempt-id
-                                          (str/join "," quantiles)))
-        {:keys [executor-run-time jvm-gc-time]
-         {:keys [bytes-read records-read]} :input-metrics
-         {:keys [bytes-written records-written]} :output-metrics
-         {:keys [read-bytes read-records]} :shuffle-read-metrics
-         {:keys [write-bytes write-records]} :shuffle-write-metrics} (get-by metrics-api)
-        metrics (map-indexed (fn [idx quantile]
-                               (let [nth #(nth % idx)
-                                     bytes-per-records (fn [part total]
-                                                         (let [t (int (nth total))
-                                                               p (nth part)]
-                                                           (if (every? pos? [t p])
-                                                             (format "%s / %d" (parse-bytes p) t)
-                                                             "")))]
-                                 {:percentile quantile
-                                  :duration (parse-millis (nth executor-run-time))
-                                  :gc-time (parse-millis (nth jvm-gc-time))
-                                  :input (bytes-per-records bytes-read records-read)
-                                  :output (bytes-per-records bytes-written records-written)
-                                  :shuffle-read (bytes-per-records read-bytes read-records)
-                                  :shuffle-write (bytes-per-records write-bytes write-records)}))
-                             quantiles-names)]
-    metrics))
-
-(defn- fetch-state [port]
-  (when-let* [endpoint (format "localhost:%s" port)
-              app-id (fetch-app endpoint)
-              {:keys [stage-id attempt-id] :as stage} (fetch-stage endpoint app-id)
-              metrics (fetch-metrics
-                       endpoint
-                       app-id
-                       stage-id
-                       attempt-id)]
-    [stage metrics]))
-
-
-(defmacro forever [& body]
-  `(while true ~@body (Thread/sleep 500)))
+                    name]} (last stages)
+            stage {:app-id id
+                   :stage-id stage-id
+                   :attempt-id attempt-id
+                   :duration (let [sbt (java.time.ZonedDateTime/parse submission-time
+                                                                      (java.time.format.DateTimeFormatter/ofPattern
+                                                                       "yyyy-MM-dd'T'HH:mm:ss.SSSz"))
+                                   sbt (at-utc (.toInstant sbt))
+                                   now (at-utc (now))]
+                               (parse-duration now sbt))
+                   :description (or (and description (first (str/split-lines description))) name)
+                   :input (bytes-per-records input-bytes input-records)
+                   :output (bytes-per-records output-bytes output-records)
+                   :shuffle-write (bytes-per-records shuffle-write-bytes shuffle-write-records)
+                   :shuffle-read (bytes-per-records shuffle-read-bytes shuffle-read-records)
+                   :tasks {:succeeded num-complete-tasks
+                           :failed num-failed-tasks
+                           :active (if (pos? num-active-tasks)
+                                     num-active-tasks
+                                     (- num-active-tasks))
+                           :total num-tasks}}
+            nullable-fields (filter #(nil? (% stage))
+                                    [:input :output :shuffle-read :shuffle-write])
+            stage (apply (partial dissoc stage) nullable-fields)]
+        stage))))
 
 (defn- print-metrics [{:keys [app-id
+                              duration
                               stage-id
                               attempt-id
                               description
-                              input-size
-                              input-records
-                              shuffle-write-size
-                              shuffle-write-records]
+                              input
+                              output
+                              shuffle-write
+                              shuffle-read]
                        {:keys [total active failed succeeded]} :tasks} metrics]
   (println "Application:" (str app-id))
   (println "Description:" description)
+  (println "Duration:" (str duration))
   (println "Stage:" (str stage-id))
   (println "Attempt:" (str attempt-id))
-  (println (format "Input Size / Records: %s/%s" input-size input-records))
-  (println (format "Shuffle Write Size / Records: %s/%s" shuffle-write-size shuffle-write-records))
+  (when (some? input)
+    (println (format "Input Size/Records: %s" input)))
+  (when (some? output)
+    (println (format "Output Size/Records: %s" output)))
+  (when (some? shuffle-write)
+    (println (format "Shuffle Write Size/Records: %s" shuffle-write)))
+  (when (some? shuffle-read)
+    (println (format "Shuffle Read Size/Records: %s" shuffle-read)))
   (println "Tasks:")
   (println (format "\tActive: %s" (str active)))
   (println (format "\tSucceeded/Total: %s/%s" (str succeeded) (str total)))
   (println (format "\tFailed: %s" (str failed)))
   (println)
-  (println (with-out-str (print-rows metrics))))
-
-(defn- thinking... []
-  (doseq [c ["-" "\\" "|" "/"]]
-    (flush)
-    (printf "\r%s" c)
-    (Thread/sleep 100)))
+  (when (some? metrics)
+    (println (with-out-str (print-rows metrics)))))
 
 (defn- clean-terminal []
   (println "\033[H\033[2J"))
 
-(defn- metrics [id]
-  (let [driver-app (driver id)
-        start 4040
-        end (+ start 10)]
-    (loop [port start]
-      (when (< port end)
-        (if (not (busy? port))
-          (do
-            (async/thread (forward-port driver-app port))
-            (clean-terminal)
-            (forever
-             (let [[app metrics] (fetch-state port)]
-               (if (and app metrics)
-                 (do
-                   (clean-terminal)
-                   (println (format "Displaying metrics for %s (localhost:%s):" id port))
-                   (print-metrics app metrics))
-                 (thinking...)))))
-          (recur (inc port)))))))
-
 (declare command-factory)
+
+(defn- find-app
+  ([partial-id]
+   (find-app ((command-factory :apps)) partial-id))
+  ([apps partial-id]
+   (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
+     app
+     (throw (ex-info "Failed to find app" {:id partial-id})))))
+
+(defn- running? [id]
+  (let [{:keys [state]} (find-app id)]
+    (= state "RUNNING")))
+
+(defn- waiting-message [msg]
+  (clean-terminal)
+  (printf msg)
+  (doseq [c (repeat 10 ".")]
+    (flush)
+    (printf "%s" c)
+    (Thread/sleep 100)))
+
+(defn- metrics [id]
+  (when (running? id)
+    (let [driver-app (driver id)
+          port (find-free-port)]
+      (async/thread (forward-port driver-app port))
+      (wait/wait-for-port "localhost" port)
+      (let [endpoint (localhost port)
+            app-id (fetch-app endpoint)]
+        (while (running? id)
+          (let [{:keys [stage-id
+                        attempt-id] :as stage} (fetch-stage endpoint app-id)
+                metrics (fetch-metrics endpoint app-id stage-id attempt-id)]
+            (when (some? stage)
+              (clean-terminal)
+              (println (format "Displaying metrics for %s (localhost:%s):" id port))
+              (println)
+              (print-metrics stage metrics)))
+          (Thread/sleep 1000))))
+    (println (format "Application %s is not running" id))))
 
 (defn- fresh-app [raw-app]
   (let [app (yaml/parse-string raw-app)
@@ -358,11 +401,6 @@
 
 (defn- command-factory [cmd]
   (get-in command-by-name [cmd]))
-
-(defn- find-app [apps partial-id]
-  (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
-    app
-    (throw (ex-info "Failed to find app" {:id partial-id}))))
 
 (defn- fetch-executors []
   (let [parse (fn [extr]
