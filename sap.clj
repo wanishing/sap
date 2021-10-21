@@ -315,12 +315,17 @@
      (= state "RUNNING")))
   ([id fetch-stage]
    (let [running? (running? id)
-         active? (let [non-active 10]
-                   (loop [trial 0]
+         active? (let [timeout (* 1000 10)
+                       now #(System/currentTimeMillis)
+                       start (now)]
+                   (loop [so-far 0]
                      (cond
                        (some? (fetch-stage)) true
-                       (>= trial non-active) false
-                       :else (recur (inc trial)))))]
+                       (>= so-far timeout) false
+                       :else
+                       (do
+                         (println "\rWaiting for active stage...")
+                         (recur (- (now) start))))))]
      (and running? active?))))
 
 (defn- metrics [id]
