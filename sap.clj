@@ -545,7 +545,7 @@
         "  logs          alias for `kubectl logs` command"
         "  pods          display all pods associated to application"
         "  reapply       re-apply application (keeping the same id)"
-        "  metrics       display metrics for running stage"
+        "  metrics       display metrics of the current active stage"
         ""]
        (str/join \newline)))
 
