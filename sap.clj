@@ -296,7 +296,7 @@
   (when (some? metrics)
     (println (with-out-str (print-rows metrics)))))
 
-(defn- clean-terminal []
+(defn- clear []
   (println "\033[H\033[2J"))
 
 (declare command-factory)
@@ -315,16 +315,25 @@
      (= state "RUNNING")))
   ([id fetch-stage]
    (let [running? (running? id)
-         active? (let [timeout (* 1000 10)
+         active? (let [timeout (* 1000 20)
                        now #(System/currentTimeMillis)
+                       seconds #(int (/ % 1000))
                        start (now)]
                    (loop [so-far 0]
                      (cond
                        (some? (fetch-stage)) true
-                       (>= so-far timeout) false
+                       (>= so-far timeout) (do
+                                             (clear)
+                                             (println "Timeout reached")
+                                             false)
                        :else
                        (do
-                         (println "\rWaiting for active stage...")
+                         (clear)
+                         (print (format "\rWaiting for active stage for %d seconds" (seconds so-far)))
+                         (doseq [c (repeat 5 ".")]
+                           (print c)
+                           (flush)
+                           (Thread/sleep 1000))
                          (recur (- (now) start))))))]
      (and running? active?))))
 
@@ -336,17 +345,19 @@
       (wait/wait-for-port "localhost" port)
       (let [endpoint (localhost port)
             app-id (fetch-app endpoint)
-            fetch-stage (partial fetch-stage endpoint app-id)]
+            fetch-stage (partial fetch-stage endpoint app-id)
+            fetch-metrics (partial fetch-metrics endpoint app-id)]
         (while (running? id fetch-stage)
           (let [{:keys [stage-id
                         attempt-id] :as stage} (fetch-stage)
-                metrics (fetch-metrics endpoint app-id stage-id attempt-id)]
+                metrics (fetch-metrics stage-id attempt-id)]
             (when (some? stage)
-              (clean-terminal)
+              (clear)
               (println (format "Displaying metrics for %s (localhost:%s):" id port))
               (println)
               (print-metrics stage metrics)))
           (Thread/sleep 1000))))
+    (println)
     (println (format "Application %s has no active stage" id))))
 
 (defn- fresh-app [raw-app]
@@ -354,27 +365,30 @@
         fresh-metadata (select-keys (:metadata app) [:name :namespace])
         fresh-app (-> app
                       (assoc :metadata fresh-metadata)
-                      (dissoc :status)
-                      (yaml/generate-string))]
+                      (dissoc :status))]
     fresh-app))
 
 (defn- yaml [id]
   (run-sh "kubectl" "get" "sparkapplication" id "-o" "yaml"))
 
-(defn- reapply [{:keys [id]} _]
+(defn- delete [id]
+  (run-proc "kubectl" "delete" "sparkapplication" id))
+
+(defn- reapply [{:keys [id]} {:keys [image]}]
   (let [raw-app (yaml id)
-        fresh-app (fresh-app raw-app)
-        fname (format "/tmp/%s.yaml" id)
-        delete (command-factory :delete)]
+        fresh-app (cond-> (fresh-app raw-app)
+                    (some? image) (assoc-in [:spec :image] image))
+        fresh-app (yaml/generate-string fresh-app)
+        fname (format "/tmp/%s.yaml" id)]
     (spit fname fresh-app)
     (println (format "Fresh app created at %s" fname))
-    (delete {:id id} _)
+    (delete id)
     (run-proc "kubectl" "apply" "-f" fname)))
 
 (def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods" "metrics"})
 
 (def command-by-name {:delete (fn [{:keys [id]} _]
-                                (run-proc "kubectl" "delete" "sparkapplication" id))
+                                (delete id))
 
                       :apps spark-apps
 
@@ -385,7 +399,7 @@
                       :get (fn [{:keys [id]} {:keys [fresh]}]
                              (let [yaml (cond-> (yaml id)
                                           (some? fresh) (fresh-app))]
-                               (print yaml)))
+                               (println yaml)))
 
                       :desc (fn [{:keys [id]} _]
                               (run-proc "kubectl" "describe" "sparkapplication" id))
@@ -456,9 +470,10 @@
 
 (defn- run-many [cmd options]
   (let [apps (find-apps-by options)
-        cmd (command-factory cmd)]
-    (doseq [app apps]
-      (cmd app options))))
+        cmd (command-factory cmd)
+        cmds (map #(future (cmd % options)) apps)]
+    (doseq [cmd cmds]
+      @cmd)))
 
 (defmulti command
   (fn [{:keys [action]}] (keyword action)))
@@ -506,7 +521,8 @@
     :parse-fn #(Integer/parseInt %)
     :default 0]
    ["-p" "--prefix PREFIX" "Prefix of application id"]
-   [nil "--fresh"]
+   [nil "--fresh" "When combined with `get`, the job will be displayed without runtime properties"]
+   [nil "--image IMAGE" "When combined with `reapply`, the job will be re-applied with given image"]
    ["-w" "--wide"]
    ["-v" "--verbose"]
    ["-h" "--help"]])
@@ -563,4 +579,3 @@
         (command {:action action :args options})))))
 
 (run *command-line-args*)
-
