@@ -394,7 +394,7 @@
 
 
 (defn- metrics
-  [{:keys [driver id]}]
+  [{:keys [driver id]} _]
   (when (running? id)
     (let [port       (find-free-port)]
       (async/thread (forward-port driver port))
@@ -433,8 +433,26 @@
 
 
 (defn- delete
-  [id]
-  (run-proc "kubectl" "delete" "sparkapplication" id))
+  ([{:keys [id]} _]
+   (delete id))
+  ([id]
+   (run-proc "kubectl" "delete" "sparkapplication" id)))
+
+
+(defn- describe
+  [{:keys [id]} _]
+  (run-proc "kubectl" "describe" "sparkapplication" id))
+
+
+(defn- logs
+  [{:keys [driver]} _]
+  (run-proc "kubectl" "logs" "-f" driver))
+
+
+(defn- pods
+  [{:keys [id]} _]
+  (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
+    (run-proc "kubectl" "get" "pods" "-l" label)))
 
 
 (defn- reapply
@@ -450,38 +468,34 @@
     (run-proc "kubectl" "apply" "-f" fname)))
 
 
+(defn- get-yaml
+  [{:keys [id]} {:keys [fresh]}]
+  (let [yaml (cond-> (yaml id)
+               (some? fresh) (fresh-app))]
+    (println (yaml/generate-string yaml))))
+
+
 (def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods" "metrics"})
 
 
 (def command-by-name
-  {:delete (fn [{:keys [id]} _]
-             (delete id))
+  {:delete delete
 
    :apps spark-apps
 
-   :states #{"FAILED" "COMPLETED"}
-
    :ui spark-ui
 
-   :get (fn [{:keys [id]} {:keys [fresh]}]
-          (let [yaml (cond-> (yaml id)
-                       (some? fresh) (fresh-app))]
-            (println (yaml/generate-string yaml))))
+   :get get-yaml
 
-   :desc (fn [{:keys [id]} _]
-           (run-proc "kubectl" "describe" "sparkapplication" id))
+   :desc describe
 
    :reapply reapply
 
-   :logs (fn [{:keys [driver]} _]
-           (run-proc "kubectl" "logs" "-f" driver))
+   :logs logs
 
-   :pods (fn [{:keys [id]} _]
-           (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
-             (run-proc "kubectl" "get" "pods" "-l" label)))
+   :pods pods
 
-   :metrics (fn [app _]
-              (metrics app))})
+   :metrics metrics})
 
 
 (defn- command-factory
@@ -539,7 +553,7 @@
 
 (defn- run-one
   [cmd options]
-  (let [app (first (find-apps-by options))
+  (let [[app & _] (find-apps-by options)
         cmd (command-factory cmd)]
     (cmd app options)))
 
@@ -562,7 +576,7 @@
 
 
 (defmethod command :cleanup [{:keys [args]}]
-  (doseq [state (command-factory :states)]
+  (doseq [state #{"FAILED" "COMPLETED"}]
     (println "Starting cleanup of" state "jobs")
     (command {:action :delete :args (assoc args :state state)})))
 
