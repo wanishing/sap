@@ -52,9 +52,6 @@
       (doseq [row rows]
         (println (fmt-row row))))))
 
-(defn- driver [id]
-  (format "%s-driver" id))
-
 (defn- duration [start end]
   (let [diff   (java.time.Duration/between end start)
         units  [[(.toDays diff) "d"]
@@ -72,7 +69,8 @@
    :state         (or state "UNKNOWN")
    :created-at    created-at
    :terminated-at (if (= terminated-at "<nil>") nil terminated-at)
-   :age           (duration (now) (to-inst created-at))})
+   :driver   (format "%s-driver" id)
+   :age      (duration (now) (to-inst created-at))})
 
 (defn- jsonpath [fields]
   (let [formatted-fields (->> fields
@@ -111,21 +109,20 @@
 
 (defn- find-free-port
   ([]
-   (find-free-port 4040 50))
+   (find-free-port 4040 (+ 50 4040)))
   ([start limit]
    (loop [port start]
      (cond
-       (>= port limit)      nil
+       (>= port limit) nil
        (not (busy? port)) port
        :else
        (recur (inc port))))))
 
-(defn- spark-ui [{:keys [id]} _]
-  (let [driver-app (driver id)
-        port       (find-free-port)]
-    (println "Port forwarding" driver-app
+(defn- spark-ui [{:keys [driver]} _]
+  (let [port  (find-free-port)]
+    (println "Port forwarding" driver
              (format "to http://localhost:%s..." port))
-    (forward-port driver-app port)))
+    (forward-port driver port)))
 
 (defn- localhost [port]
   (format "localhost:%s" port))
@@ -337,11 +334,10 @@
                           (recur (- (now) start))))))]
      (and running? active?))))
 
-(defn- metrics [id]
+(defn- metrics [{:keys [driver id]}]
   (when (running? id)
-    (let [driver-app (driver id)
-          port       (find-free-port)]
-      (async/thread (forward-port driver-app port))
+    (let [port       (find-free-port)]
+      (async/thread (forward-port driver port))
       (wait/wait-for-port "localhost" port)
       (let [endpoint      (localhost port)
             app-id        (fetch-app endpoint)
@@ -399,22 +395,22 @@
                       :get (fn [{:keys [id]} {:keys [fresh]}]
                              (let [yaml (cond-> (yaml id)
                                           (some? fresh) (fresh-app))]
-                               (println yaml)))
+                               (println (yaml/generate-string yaml))))
 
                       :desc (fn [{:keys [id]} _]
                               (run-proc "kubectl" "describe" "sparkapplication" id))
 
                       :reapply reapply
 
-                      :logs (fn [{:keys [id]} _]
-                              (run-proc "kubectl" "logs" "-f" (driver id)))
+                      :logs (fn [{:keys [driver]} _]
+                              (run-proc "kubectl" "logs" "-f" driver))
 
                       :pods (fn [{:keys [id]} _]
                               (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
                                 (run-proc "kubectl" "get" "pods" "-l" label)))
 
-                      :metrics (fn [{:keys [id]} _]
-                                 (metrics id))})
+                      :metrics (fn [app _]
+                                 (metrics app))})
 
 (defn- command-factory [cmd]
   (get-in command-by-name [cmd]))
@@ -487,7 +483,7 @@
     (command {:action :delete :args (assoc args :state state)})))
 
 (defmethod command :ls [{:keys [args]}]
-  (let [invisble-fields [:created-at :terminated-at]]
+  (let [invisble-fields [:created-at :terminated-at :driver]]
     (->> (find-apps-by args)
          (sort-by (juxt :id :created-at))
          (map #(reduce (fn [app key] (dissoc app key)) % invisble-fields))
