@@ -1,20 +1,27 @@
 #!/usr/bin/env bb
 (ns sap
-  (:require [clojure.java.shell :refer [sh]]
-            [clojure.string :as str]
-            [clojure.pprint :refer [cl-format]]
-            [cheshire.core :as json]
-            [clj-yaml.core :as yaml]
-            [clojure.core.async :as async]
-            [babashka.wait :as wait]
-            [babashka.curl :as curl]
-            [babashka.process :refer [process]]
-            [clojure.tools.cli :refer [parse-opts]])
-  (:import [java.net Socket SocketException]))
+  (:require
+    [babashka.curl :as curl]
+    [babashka.process :refer [process]]
+    [babashka.wait :as wait]
+    [cheshire.core :as json]
+    [clj-yaml.core :as yaml]
+    [clojure.core.async :as async]
+    [clojure.java.shell :refer [sh]]
+    [clojure.pprint :refer [cl-format]]
+    [clojure.string :as str]
+    [clojure.tools.cli :refer [parse-opts]])
+  (:import
+    (java.net
+      Socket
+      SocketException)))
+
 
 (def ^:dynamic *verbose* nil)
 
-(defn- run-sh [& args]
+
+(defn- run-sh
+  [& args]
   (when *verbose*
     (println (str/join " " args)))
   (let [{:keys [out exit err]} (apply sh args)]
@@ -22,27 +29,40 @@
       out
       (throw (ex-info err {:command args :error err})))))
 
-(defn- run-proc [& args]
+
+(defn- run-proc
+  [& args]
   (when *verbose*
     (println (str/join " " args)))
   @(process args {:out :inherit})
   nil)
 
-(defn- now [] (java.time.Instant/now))
 
-(defn- to-inst [s] (java.time.Instant/parse s))
+(defn- now
+  []
+  (java.time.Instant/now))
 
-(defn- at-utc [inst] (.atZone inst java.time.ZoneOffset/UTC))
 
-(defn- print-rows [rows]
+(defn- to-inst
+  [s]
+  (java.time.Instant/parse s))
+
+
+(defn- at-utc
+  [inst]
+  (.atZone inst java.time.ZoneOffset/UTC))
+
+
+(defn- print-rows
+  [rows]
   (when (seq rows)
     (let [divider (apply str (repeat 4 " "))
           cols    (keys (first rows))
           headers (map #(str/upper-case (name %)) cols)
           widths  (map
-                   (fn [k]
-                     (apply max (count (str k)) (map #(count (str (get % k))) rows)))
-                   cols)
+                    (fn [k]
+                      (apply max (count (str k)) (map #(count (str (get % k))) rows)))
+                    cols)
           fmts    (map #(str "%-" % "s") widths)
           fmt-row (fn [row]
                     (apply str (interpose divider
@@ -52,7 +72,9 @@
       (doseq [row rows]
         (println (fmt-row row))))))
 
-(defn- duration [start end]
+
+(defn- duration
+  [start end]
   (let [diff   (java.time.Duration/between end start)
         units  [[(.toDays diff) "d"]
                 [(mod (.toHours diff) 24) "h"]
@@ -64,7 +86,9 @@
                     (str/join))]
     result))
 
-(defn- parse-app [[id created-at state terminated-at]]
+
+(defn- parse-app
+  [[id created-at state terminated-at]]
   {:id            id
    :state         (or state "UNKNOWN")
    :created-at    created-at
@@ -72,12 +96,15 @@
    :driver   (format "%s-driver" id)
    :age      (duration (now) (to-inst created-at))})
 
-(defn- jsonpath [fields]
+
+(defn- jsonpath
+  [fields]
   (let [formatted-fields (->> fields
                               (map #(format "{%s}" %))
                               (str/join "{\"\\t\"}"))
         jsonpath         (format "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}" formatted-fields)]
     jsonpath))
+
 
 (defn- spark-apps
   ([state]
@@ -87,10 +114,10 @@
      (spark-apps)))
   ([]
    (let [raw-apps (run-sh "kubectl" "get" "sparkapplication" (jsonpath
-                                                              [".metadata.name"
-                                                               ".metadata.creationTimestamp"
-                                                               ".status.applicationState.state"
-                                                               ".status.terminationTime"]))
+                                                               [".metadata.name"
+                                                                ".metadata.creationTimestamp"
+                                                                ".status.applicationState.state"
+                                                                ".status.terminationTime"]))
          apps     (->> raw-apps
                        (str/split-lines)
                        (filter #(not (str/blank? %)))
@@ -98,14 +125,19 @@
                        (map parse-app))]
      apps)))
 
-(defn- forward-port [driver port]
+
+(defn- forward-port
+  [driver port]
   (run-sh "kubectl" "port-forward" driver (format "%s:4040" port)))
 
-(defn- busy? [port]
+
+(defn- busy?
+  [port]
   (try
     (nil? (.close (Socket. "localhost" port)))
     (catch SocketException _
       false)))
+
 
 (defn- find-free-port
   ([]
@@ -118,16 +150,22 @@
        :else
        (recur (inc port))))))
 
-(defn- spark-ui [{:keys [driver]} _]
+
+(defn- spark-ui
+  [{:keys [driver]} _]
   (let [port  (find-free-port)]
     (println "Port forwarding" driver
              (format "to http://localhost:%s..." port))
     (forward-port driver port)))
 
-(defn- localhost [port]
+
+(defn- localhost
+  [port]
   (format "localhost:%s" port))
 
-(defn- get-by [api]
+
+(defn- get-by
+  [api]
   (let [headers     {"Accept" "application/json"}
         resp        (curl/get api {:headers headers
                                    :throw   false})
@@ -149,7 +187,9 @@
                           (json/parse-string (comp keyword ->snakecase))))]
     body))
 
-(defn- ->millis [millis]
+
+(defn- ->millis
+  [millis]
   (if (or (nil? millis) (zero? millis))
     "0.0ms"
     (let [inst  (at-utc (java.time.Instant/ofEpochMilli millis))
@@ -163,7 +203,9 @@
                      (str/join))]
       res)))
 
-(defn- ->bytes [bytes]
+
+(defn- ->bytes
+  [bytes]
   (if (some? bytes)
     (let [units      [[(double (/ bytes (* 1024 1024 1024))) "GiB"]
                       [(double (/ bytes (* 1024 1024))) "MiB"]
@@ -175,39 +217,46 @@
       res)
     0.0))
 
-(defn- fetch-app [endpoint]
+
+(defn- fetch-app
+  [endpoint]
   (let [api          (str endpoint "/api/v1/applications")
         {:keys [id]} (first (get-by api))]
     id))
 
-(defn- bytes-per-records [bytes records]
+
+(defn- bytes-per-records
+  [bytes records]
   (when (every? pos? [bytes records])
     (format "%s/%s" (->bytes bytes) (cl-format nil "~:d" (long records)))))
 
-(defn- fetch-metrics [endpoint app-id stage-id attempt-id]
-  (let [quantiles                                                    [0.01 0.25 0.5 0.75 0.99]
-        quantiles-names                                              ["Min" "25th" "Median" "75th" "Max"]
+
+(defn- fetch-metrics
+  [endpoint app-id stage-id attempt-id]
+  (let [percentiles                                                    [0.01 0.25 0.5 0.75 0.99]
+        percentiles-names                                              ["Min" "25th" "Median" "75th" "Max"]
         metrics-api                                                  (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s"
                                                                                            app-id
                                                                                            stage-id
                                                                                            attempt-id
-                                                                                           (str/join "," quantiles)))
+                                                                                           (str/join "," percentiles)))
         {:keys                                   [executor-run-time jvm-gc-time] :as response
          {:keys [bytes-read records-read]}       :input-metrics
          {:keys [bytes-written records-written]} :output-metrics
          {:keys [read-bytes read-records]}       :shuffle-read-metrics
          {:keys [write-bytes write-records]}     :shuffle-write-metrics} (get-by metrics-api)
+        parse-percentile (fn [idx quantile]
+                           (let [nth #(nth % idx)]
+                             {:percentile    quantile
+                              :duration      (->millis (nth executor-run-time))
+                              :gc-time       (->millis (nth jvm-gc-time))
+                              :input         (bytes-per-records (nth bytes-read) (nth records-read))
+                              :output        (bytes-per-records (nth bytes-written) (nth records-written))
+                              :shuffle-read  (bytes-per-records (nth read-bytes) (nth read-records))
+                              :shuffle-write (bytes-per-records (nth write-bytes) (nth write-records))}))
         metrics                                                      (if (some? response)
-                                                                       (map-indexed (fn [idx quantile]
-                                                                                      (let [nth #(nth % idx)]
-                                                                                        {:percentile    quantile
-                                                                                         :duration      (->millis (nth executor-run-time))
-                                                                                         :gc-time       (->millis (nth jvm-gc-time))
-                                                                                         :input         (bytes-per-records (nth bytes-read) (nth records-read))
-                                                                                         :output        (bytes-per-records (nth bytes-written) (nth records-written))
-                                                                                         :shuffle-read  (bytes-per-records (nth read-bytes) (nth read-records))
-                                                                                         :shuffle-write (bytes-per-records (nth write-bytes) (nth write-records))}))
-                                                                                    quantiles-names)
+                                                                       (map-indexed parse-percentile
+                                                                                    percentiles-names)
                                                                        [])
         nullable-fields                                              (filter (fn [field]
                                                                                (every? nil? (map field metrics)))
@@ -216,7 +265,9 @@
                                                                             (apply (partial dissoc m) nullable-fields)) metrics)]
     metrics))
 
-(defn- fetch-stage [endpoint id]
+
+(defn- fetch-stage
+  [endpoint id]
   (let [stages-api (str endpoint (format "/api/v1/applications/%s/stages?status=active" id))
         stages     (get-by stages-api)]
     (when (seq stages)
@@ -242,7 +293,7 @@
                              :attempt-id    attempt-id
                              :duration      (let [sbt (java.time.ZonedDateTime/parse submission-time
                                                                                      (java.time.format.DateTimeFormatter/ofPattern
-                                                                                      "yyyy-MM-dd'T'HH:mm:ss.SSSz"))
+                                                                                       "yyyy-MM-dd'T'HH:mm:ss.SSSz"))
                                                   sbt (at-utc (.toInstant sbt))
                                                   now (at-utc (now))]
                                               (duration now sbt))
@@ -262,16 +313,18 @@
             stage           (apply (partial dissoc stage) nullable-fields)]
         stage))))
 
-(defn- print-metrics [{:keys                                   [app-id
-                                                                duration
-                                                                stage-id
-                                                                attempt-id
-                                                                description
-                                                                input
-                                                                output
-                                                                shuffle-write
-                                                                shuffle-read]
-                       {:keys [total active failed succeeded]} :tasks} metrics]
+
+(defn- print-metrics
+  [{:keys                                   [app-id
+                                             duration
+                                             stage-id
+                                             attempt-id
+                                             description
+                                             input
+                                             output
+                                             shuffle-write
+                                             shuffle-read]
+    {:keys [total active failed succeeded]} :tasks} metrics]
   (println "Application:" (str app-id))
   (println "Description:" description)
   (println "Duration:" (str duration))
@@ -293,10 +346,14 @@
   (when (some? metrics)
     (println (with-out-str (print-rows metrics)))))
 
-(defn- clear []
+
+(defn- clear
+  []
   (println "\033[H\033[2J"))
 
+
 (declare command-factory)
+
 
 (defn- find-app
   ([partial-id]
@@ -305,6 +362,7 @@
    (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
      app
      (throw (ex-info "Failed to find app" {:id partial-id})))))
+
 
 (defn- running?
   ([id]
@@ -334,7 +392,9 @@
                           (recur (- (now) start))))))]
      (and running? active?))))
 
-(defn- metrics [{:keys [driver id]}]
+
+(defn- metrics
+  [{:keys [driver id]}]
   (when (running? id)
     (let [port       (find-free-port)]
       (async/thread (forward-port driver port))
@@ -356,7 +416,9 @@
     (println)
     (println (format "Application %s has no active stage" id))))
 
-(defn- fresh-app [raw-app]
+
+(defn- fresh-app
+  [raw-app]
   (let [app            (yaml/parse-string raw-app)
         fresh-metadata (select-keys (:metadata app) [:name :namespace])
         fresh-app      (-> app
@@ -364,13 +426,19 @@
                            (dissoc :status))]
     fresh-app))
 
-(defn- yaml [id]
+
+(defn- yaml
+  [id]
   (run-sh "kubectl" "get" "sparkapplication" id "-o" "yaml"))
 
-(defn- delete [id]
+
+(defn- delete
+  [id]
   (run-proc "kubectl" "delete" "sparkapplication" id))
 
-(defn- reapply [{:keys [id]} {:keys [image]}]
+
+(defn- reapply
+  [{:keys [id]} {:keys [image]}]
   (let [raw-app   (yaml id)
         fresh-app (cond-> (fresh-app raw-app)
                     (some? image) (assoc-in [:spec :image] image))
@@ -381,41 +449,48 @@
     (delete id)
     (run-proc "kubectl" "apply" "-f" fname)))
 
+
 (def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods" "metrics"})
 
-(def command-by-name {:delete (fn [{:keys [id]} _]
-                                (delete id))
 
-                      :apps spark-apps
+(def command-by-name
+  {:delete (fn [{:keys [id]} _]
+             (delete id))
 
-                      :states #{"FAILED" "COMPLETED"}
+   :apps spark-apps
 
-                      :ui spark-ui
+   :states #{"FAILED" "COMPLETED"}
 
-                      :get (fn [{:keys [id]} {:keys [fresh]}]
-                             (let [yaml (cond-> (yaml id)
-                                          (some? fresh) (fresh-app))]
-                               (println (yaml/generate-string yaml))))
+   :ui spark-ui
 
-                      :desc (fn [{:keys [id]} _]
-                              (run-proc "kubectl" "describe" "sparkapplication" id))
+   :get (fn [{:keys [id]} {:keys [fresh]}]
+          (let [yaml (cond-> (yaml id)
+                       (some? fresh) (fresh-app))]
+            (println (yaml/generate-string yaml))))
 
-                      :reapply reapply
+   :desc (fn [{:keys [id]} _]
+           (run-proc "kubectl" "describe" "sparkapplication" id))
 
-                      :logs (fn [{:keys [driver]} _]
-                              (run-proc "kubectl" "logs" "-f" driver))
+   :reapply reapply
 
-                      :pods (fn [{:keys [id]} _]
-                              (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
-                                (run-proc "kubectl" "get" "pods" "-l" label)))
+   :logs (fn [{:keys [driver]} _]
+           (run-proc "kubectl" "logs" "-f" driver))
 
-                      :metrics (fn [app _]
-                                 (metrics app))})
+   :pods (fn [{:keys [id]} _]
+           (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
+             (run-proc "kubectl" "get" "pods" "-l" label)))
 
-(defn- command-factory [cmd]
+   :metrics (fn [app _]
+              (metrics app))})
+
+
+(defn- command-factory
+  [cmd]
   (get-in command-by-name [cmd]))
 
-(defn- fetch-executors []
+
+(defn- fetch-executors
+  []
   (let [parse     (fn [extr]
                     (let [[pod, labels] (str/split extr #"\t")
                           app           (-> labels
@@ -423,25 +498,27 @@
                                             (:sparkoperator.k8s.io/app-name))]
                       {:executor pod :app app}))
         executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" (jsonpath
-                                                                                  [".metadata.name"
-                                                                                   ".metadata.labels"]))
+                                                                                   [".metadata.name"
+                                                                                    ".metadata.labels"]))
                        (str/split-lines)
                        (map parse))]
     executors))
 
+
 (def wide-info
   (delay
-   (let [add-executors (fn [executors {:keys [id] :as app}]
-                         (let [pods (filter #(= id (:app %)) executors)]
-                           (assoc app :executors (count pods))))
-         add-duration  (fn [{:keys [age created-at terminated-at] :as app}]
-                         (let [duration (if (some? terminated-at)
-                                          (duration (to-inst terminated-at) (to-inst created-at))
-                                          age)]
-                           (assoc app :duration duration)))]
-     (comp
-      (map add-duration)
-      (map (partial add-executors (fetch-executors)))))))
+    (let [add-executors (fn [executors {:keys [id] :as app}]
+                          (let [pods (filter #(= id (:app %)) executors)]
+                            (assoc app :executors (count pods))))
+          add-duration  (fn [{:keys [age created-at terminated-at] :as app}]
+                          (let [duration (if (some? terminated-at)
+                                           (duration (to-inst terminated-at) (to-inst created-at))
+                                           age)]
+                            (assoc app :duration duration)))]
+      (comp
+        (map add-duration)
+        (map (partial add-executors (fetch-executors)))))))
+
 
 (defn- find-apps-by
   [{:keys [state id days prefix wide]}]
@@ -459,28 +536,36 @@
                  (some? wide)   (into [] @wide-info))]
     apps))
 
-(defn- run-one [cmd options]
+
+(defn- run-one
+  [cmd options]
   (let [app (first (find-apps-by options))
         cmd (command-factory cmd)]
     (cmd app options)))
 
-(defn- run-many [cmd options]
+
+(defn- run-many
+  [cmd options]
   (let [apps (find-apps-by options)
         cmd  (command-factory cmd)
         cmds (map #(future (cmd % options)) apps)]
     (doseq [cmd cmds]
       @cmd)))
 
+
 (defmulti command
   (fn [{:keys [action]}] (keyword action)))
 
+
 (defmethod command :delete [{:keys [args]}]
   (run-many :delete args))
+
 
 (defmethod command :cleanup [{:keys [args]}]
   (doseq [state (command-factory :states)]
     (println "Starting cleanup of" state "jobs")
     (command {:action :delete :args (assoc args :state state)})))
+
 
 (defmethod command :ls [{:keys [args]}]
   (let [invisble-fields [:created-at :terminated-at :driver]]
@@ -489,26 +574,34 @@
          (map #(reduce (fn [app key] (dissoc app key)) % invisble-fields))
          (print-rows))))
 
+
 (defmethod command :pods [{:keys [args]}]
   (run-many :pods args))
+
 
 (defmethod command :ui [{:keys [args]}]
   (run-one :ui args))
 
+
 (defmethod command :get [{:keys [args]}]
   (run-many :get args))
+
 
 (defmethod command :desc [{:keys [args]}]
   (run-many :desc args))
 
+
 (defmethod command :logs [{:keys [args]}]
   (run-one :logs args))
+
 
 (defmethod command :reapply [{:keys [args]}]
   (run-many :reapply args))
 
+
 (defmethod command :metrics [{:keys [args]}]
   (run-one :metrics args))
+
 
 (def cli-options
   [["-s" "--state STATE" "State of application"]
@@ -523,7 +616,9 @@
    ["-v" "--verbose"]
    ["-h" "--help"]])
 
-(defn- usage [options-summary]
+
+(defn- usage
+  [options-summary]
   (->> ["kubectl wrapper to perform common actions against Spark applications."
         ""
         "Usage: sap action [options]"
@@ -545,9 +640,12 @@
         ""]
        (str/join \newline)))
 
-(defn- error-msg [errors]
+
+(defn- error-msg
+  [errors]
   (str "The following errors occurred while parsing your command:\n\n"
        (str/join \newline errors)))
+
 
 (defn- validate-args
   [args]
@@ -563,16 +661,21 @@
       :else
       {:exit-message (usage summary)})))
 
-(defn- exit [status msg]
+
+(defn- exit
+  [status msg]
   (println msg)
   (System/exit status))
 
-(defn run [args]
+
+(defn run
+  [args]
   (let [{:keys [action options exit-message ok?]} (validate-args args)]
     (if exit-message
       (exit (if ok? 0 1) exit-message)
       (binding [*verbose* (:verbose options)]
         (command {:action action :args options})))))
+
 
 (run *command-line-args*)
 
