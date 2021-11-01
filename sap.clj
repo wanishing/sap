@@ -266,66 +266,67 @@
     metrics))
 
 
-(defn- fetch-stage
+(defn- parse-stage
+  [{:keys [stage-id
+           attempt-id
+           num-tasks
+           num-failed-tasks
+           num-active-tasks
+           num-complete-tasks
+           input-bytes
+           input-records
+           output-bytes
+           output-records
+           shuffle-write-bytes
+           shuffle-write-records
+           shuffle-read-bytes
+           shuffle-read-records
+           submission-time
+           description
+           name]}]
+  (let [stage {:stage-id      stage-id
+               :attempt-id    attempt-id
+               :duration      (let [sbt (java.time.ZonedDateTime/parse submission-time
+                                                                       (java.time.format.DateTimeFormatter/ofPattern
+                                                                         "yyyy-MM-dd'T'HH:mm:ss.SSSz"))
+                                    sbt (at-utc (.toInstant sbt))
+                                    now (at-utc (now))]
+                                (duration now sbt))
+               :description   (or (and description (first (str/split-lines description))) name)
+               :input         (bytes-per-records input-bytes input-records)
+               :output        (bytes-per-records output-bytes output-records)
+               :shuffle-write (bytes-per-records shuffle-write-bytes shuffle-write-records)
+               :shuffle-read  (bytes-per-records shuffle-read-bytes shuffle-read-records)
+               :tasks         {:succeeded num-complete-tasks
+                               :failed    num-failed-tasks
+                               :active    (if (pos? num-active-tasks)
+                                            num-active-tasks
+                                            (- num-active-tasks))
+                               :total     num-tasks}}
+        nullable-fields (filter #(nil? (% stage))
+                                [:input :output :shuffle-read :shuffle-write])
+        stage           (apply (partial dissoc stage) nullable-fields)]
+    stage))
+
+
+(defn- fetch-stages
   [endpoint id]
   (let [stages-api (str endpoint (format "/api/v1/applications/%s/stages?status=active" id))
         stages     (get-by stages-api)]
     (when (seq stages)
-      (let [{:keys [stage-id
-                    attempt-id
-                    num-tasks
-                    num-failed-tasks
-                    num-active-tasks
-                    num-complete-tasks
-                    input-bytes
-                    input-records
-                    output-bytes
-                    output-records
-                    shuffle-write-bytes
-                    shuffle-write-records
-                    shuffle-read-bytes
-                    shuffle-read-records
-                    submission-time
-                    description
-                    name]}  (last stages)
-            stage           {:app-id        id
-                             :stage-id      stage-id
-                             :attempt-id    attempt-id
-                             :duration      (let [sbt (java.time.ZonedDateTime/parse submission-time
-                                                                                     (java.time.format.DateTimeFormatter/ofPattern
-                                                                                       "yyyy-MM-dd'T'HH:mm:ss.SSSz"))
-                                                  sbt (at-utc (.toInstant sbt))
-                                                  now (at-utc (now))]
-                                              (duration now sbt))
-                             :description   (or (and description (first (str/split-lines description))) name)
-                             :input         (bytes-per-records input-bytes input-records)
-                             :output        (bytes-per-records output-bytes output-records)
-                             :shuffle-write (bytes-per-records shuffle-write-bytes shuffle-write-records)
-                             :shuffle-read  (bytes-per-records shuffle-read-bytes shuffle-read-records)
-                             :tasks         {:succeeded num-complete-tasks
-                                             :failed    num-failed-tasks
-                                             :active    (if (pos? num-active-tasks)
-                                                          num-active-tasks
-                                                          (- num-active-tasks))
-                                             :total     num-tasks}}
-            nullable-fields (filter #(nil? (% stage))
-                                    [:input :output :shuffle-read :shuffle-write])
-            stage           (apply (partial dissoc stage) nullable-fields)]
-        stage))))
+      (map parse-stage stages))))
 
 
 (defn- print-metrics
-  [{:keys                                   [app-id
-                                             duration
-                                             stage-id
-                                             attempt-id
-                                             description
-                                             input
-                                             output
-                                             shuffle-write
-                                             shuffle-read]
+  [{:keys [duration
+           stage-id
+           attempt-id
+           description
+           input
+           output
+           shuffle-write
+           shuffle-read]
     {:keys [total active failed succeeded]} :tasks} metrics]
-  (println "Application:" (str app-id))
   (println "Description:" description)
   (println "Duration:" (str duration))
   (println "Stage:" (str stage-id))
@@ -370,26 +371,17 @@
      (= state "RUNNING")))
   ([id fetch-stage]
    (let [running? (running? id)
-         active?  (let [timeout (* 1000 20)
-                        now     #(System/currentTimeMillis)
-                        seconds #(int (/ % 1000))
-                        start   (now)]
-                    (loop [so-far 0]
-                      (cond
-                        (some? (fetch-stage)) true
-                        (>= so-far timeout)   (do
-                                                (clear)
-                                                (println "Timeout reached")
-                                                false)
-                        :else
-                        (do
-                          (clear)
-                          (print (format "\rWaiting for active stage for %d seconds" (seconds so-far)))
-                          (doseq [c (repeat 5 ".")]
-                            (print c)
-                            (flush)
-                            (Thread/sleep 1000))
-                          (recur (- (now) start))))))]
+         active?  (let [start (.minusSeconds (now) 1)]
+                    (loop []
+                      (if (some? (fetch-stage)) true
+                          (do
+                            (clear)
+                            (print (format "\rWaiting for active stage for %s" (duration (now) start)))
+                            (doseq [c (repeat 5 ".")]
+                              (print c)
+                              (flush)
+                              (Thread/sleep 1000))
+                            (recur)))))]
      (and running? active?))))
 
 
@@ -401,18 +393,23 @@
       (wait/wait-for-port "localhost" port)
       (let [endpoint      (localhost port)
             app-id        (fetch-app endpoint)
-            fetch-stage   (partial fetch-stage endpoint app-id)
+            fetch-stages   (partial fetch-stages endpoint app-id)
             fetch-metrics (partial fetch-metrics endpoint app-id)]
-        (while (running? id fetch-stage)
-          (let [{:keys              [stage-id
-                                     attempt-id] :as stage} (fetch-stage)
-                metrics                        (fetch-metrics stage-id attempt-id)]
-            (when (some? stage)
-              (clear)
-              (println (format "Displaying metrics for %s (localhost:%s):" id port))
-              (println)
-              (print-metrics stage metrics)))
-          (Thread/sleep 1000))))
+        (clear)
+        (while (running? id fetch-stages)
+          (let [stages (fetch-stages)
+                stages (map (fn [{:keys [stage-id
+                                         attempt-id] :as stage}]
+                              {:metrics (fetch-metrics stage-id attempt-id)
+                               :stage stage}) stages)]
+            (println (with-out-str
+                       (clear)
+                       (println (format "Displaying metrics for %s (localhost:%s):" id port))
+                       (doseq [{:keys [stage
+                                       metrics]} stages]
+                         (when (some? stage)
+                           (println)
+                           (print-metrics stage metrics)))))))))
     (println)
     (println (format "Application %s has no active stage" id))))
 
