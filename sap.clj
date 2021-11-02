@@ -515,12 +515,12 @@
 
 (defn- fetch-executors
   []
-  (let [parse     (fn [extr]
-                    (let [[pod, labels] (str/split extr #"\t")
-                          app           (-> labels
-                                            (json/parse-string true)
-                                            (:sparkoperator.k8s.io/app-name))]
-                      {:executor pod :app app}))
+  (let [parse (fn [extr]
+                (let [[pod, labels] (str/split extr #"\t")
+                      app (-> labels
+                              (json/parse-string true)
+                              (:sparkoperator.k8s.io/app-name))]
+                  {:executor pod :app app}))
         executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" (jsonpath
                                                                                    [".metadata.name"
                                                                                     ".metadata.labels"]))
@@ -546,18 +546,18 @@
 
 (defn- find-apps-by
   [{:keys [state id days prefix wide]}]
-  (let [apps   (command-factory :apps)
-        apps   (if (some? id)
-                 [(find-app (apps) id)]
-                 (apps state))
+  (let [apps (command-factory :apps)
+        apps (if (some? id)
+               [(find-app (apps) id)]
+               (apps state))
         older? (fn [{:keys [created-at]}]
                  (let [diff (.toDays (java.time.Duration/between (->inst created-at) (now)))]
                    (>= diff days)))
-        apps   (cond->> apps
-                 (some? days)   (filter older?)
-                 (some? prefix) (filter (fn [{:keys [id]}]
-                                          (str/starts-with? id prefix)))
-                 (some? wide)   (into [] @wide-info))]
+        apps (cond->> apps
+               (some? days)   (filter older?)
+               (some? prefix) (filter (fn [{:keys [id]}]
+                                        (str/starts-with? id prefix)))
+               (some? wide)   (into [] @wide-info))]
     apps))
 
 
