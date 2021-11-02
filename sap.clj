@@ -233,13 +233,13 @@
 
 (defn- fetch-metrics
   [endpoint app-id stage-id attempt-id]
-  (let [percentiles                                                    [0.01 0.25 0.5 0.75 0.99]
-        percentiles-names                                              ["Min" "25th" "Median" "75th" "Max"]
-        api                                                  (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s"
-                                                                                   app-id
-                                                                                   stage-id
-                                                                                   attempt-id
-                                                                                   (str/join "," percentiles)))
+  (let [percentiles [0.01 0.25 0.5 0.75 0.99]
+        percentiles-names ["Min" "25th" "Median" "75th" "Max"]
+        api (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s"
+                                  app-id
+                                  stage-id
+                                  attempt-id
+                                  (str/join "," percentiles)))
         {:keys                                   [executor-run-time jvm-gc-time] :as response
          {:keys [bytes-read records-read]}       :input-metrics
          {:keys [bytes-written records-written]} :output-metrics
@@ -254,15 +254,15 @@
                               :output        (bytes-per-records (nth bytes-written) (nth records-written))
                               :shuffle-read  (bytes-per-records (nth read-bytes) (nth read-records))
                               :shuffle-write (bytes-per-records (nth write-bytes) (nth write-records))}))
-        metrics                                                      (if (some? response)
-                                                                       (map-indexed parse-percentile
-                                                                                    percentiles-names)
-                                                                       [])
-        nullable-fields                                              (filter (fn [field]
-                                                                               (every? nil? (map field metrics)))
-                                                                             [:input :output :shuffle-read :shuffle-write])
-        metrics                                                      (map (fn [m]
-                                                                            (apply (partial dissoc m) nullable-fields)) metrics)]
+        metrics (if (some? response)
+                  (map-indexed parse-percentile
+                               percentiles-names)
+                  [])
+        nullable-fields (filter (fn [field]
+                                  (every? nil? (map field metrics)))
+                                [:input :output :shuffle-read :shuffle-write])
+        metrics (map (fn [m]
+                       (apply (partial dissoc m) nullable-fields)) metrics)]
     metrics))
 
 
