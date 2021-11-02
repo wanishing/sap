@@ -235,16 +235,16 @@
   [endpoint app-id stage-id attempt-id]
   (let [percentiles                                                    [0.01 0.25 0.5 0.75 0.99]
         percentiles-names                                              ["Min" "25th" "Median" "75th" "Max"]
-        metrics-api                                                  (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s"
-                                                                                           app-id
-                                                                                           stage-id
-                                                                                           attempt-id
-                                                                                           (str/join "," percentiles)))
+        api                                                  (str endpoint (format "/api/v1/applications/%s/stages/%s/%s/taskSummary?quantiles=%s"
+                                                                                   app-id
+                                                                                   stage-id
+                                                                                   attempt-id
+                                                                                   (str/join "," percentiles)))
         {:keys                                   [executor-run-time jvm-gc-time] :as response
          {:keys [bytes-read records-read]}       :input-metrics
          {:keys [bytes-written records-written]} :output-metrics
          {:keys [read-bytes read-records]}       :shuffle-read-metrics
-         {:keys [write-bytes write-records]}     :shuffle-write-metrics} (get-by metrics-api)
+         {:keys [write-bytes write-records]}     :shuffle-write-metrics} (get-by api)
         parse-percentile (fn [idx quantile]
                            (let [nth #(nth % idx)]
                              {:percentile    quantile
@@ -311,10 +311,19 @@
 
 (defn- fetch-stages
   [endpoint id]
-  (let [stages-api (str endpoint (format "/api/v1/applications/%s/stages?status=active" id))
-        stages     (get-by stages-api)]
+  (let [api (str endpoint (format "/api/v1/applications/%s/stages?status=active" id))
+        stages     (get-by api)]
     (when (seq stages)
       (map parse-stage stages))))
+
+
+(defn- fetch-executors-count
+  [endpoint id]
+  (let [api (str endpoint (format "/api/v1/applications/%s/executors" id))
+        pods (get-by api)]
+    (if (seq pods)
+      (dec (count pods))
+      0)))
 
 
 (defn- print-metrics
@@ -393,6 +402,7 @@
       (wait/wait-for-port "localhost" port)
       (let [endpoint      (localhost port)
             app-id        (fetch-app endpoint)
+            fetch-executors (partial fetch-executors-count endpoint app-id)
             fetch-stages   (partial fetch-stages endpoint app-id)
             fetch-metrics (partial fetch-metrics endpoint app-id)]
         (clear)
@@ -404,7 +414,10 @@
                                :stage stage}) stages)]
             (println (with-out-str
                        (clear)
-                       (println (format "Displaying metrics for %s (localhost:%s):" id port))
+                       (println "Name:" id)
+                       (println (format "Address: http://%s" (localhost port)))
+                       (println "Application Id:" app-id)
+                       (println "Executors Count:" (fetch-executors))
                        (doseq [{:keys [stage
                                        metrics]} stages]
                          (when (some? stage)
@@ -658,17 +671,25 @@
        (str/join \newline errors)))
 
 
+(defn- validate-command
+  [commands input]
+  (let [cmds (filter #(and (str/starts-with? % input) %) commands)]
+    (when (= (count cmds) 1)
+      (first cmds))))
+
+
 (defn- validate-args
   [args]
-  (let [{:keys [options arguments errors summary]} (parse-opts args cli-options)]
+  (let [{:keys [options arguments errors summary]} (parse-opts args cli-options)
+        cmd (validate-command commands (first arguments))]
     (cond
       (:help options)
       {:exit-message (usage summary) :ok? true}
       errors
       {:exit-message (error-msg errors)}
       (and (= 1 (count arguments))
-           (commands (first arguments)))
-      {:action (first arguments) :options options}
+           cmd)
+      {:action cmd :options options}
       :else
       {:exit-message (usage summary)})))
 
