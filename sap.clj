@@ -43,7 +43,7 @@
   (java.time.Instant/now))
 
 
-(defn- to-inst
+(defn- ->inst
   [s]
   (java.time.Instant/parse s))
 
@@ -94,7 +94,7 @@
    :created-at    created-at
    :terminated-at (if (= terminated-at "<nil>") nil terminated-at)
    :driver   (format "%s-driver" id)
-   :age      (duration (now) (to-inst created-at))})
+   :age      (duration (now) (->inst created-at))})
 
 
 (defn- jsonpath
@@ -371,18 +371,18 @@
      (= state "RUNNING")))
   ([id fetch-stage]
    (let [running? (running? id)
-         active?  (let [start (.minusSeconds (now) 1)]
-                    (loop []
-                      (if (some? (fetch-stage)) true
-                          (do
-                            (clear)
-                            (print (format "\rWaiting for active stage for %s" (duration (now) start)))
-                            (doseq [c (repeat 5 ".")]
-                              (print c)
-                              (flush)
-                              (Thread/sleep 1000))
-                            (recur)))))]
-     (and running? active?))))
+         active?  #(let [start (.minusSeconds (now) 1)]
+                     (loop []
+                       (if (some? (fetch-stage)) true
+                           (do
+                             (clear)
+                             (print (format "\rWaiting for active stage for %s" (duration (now) start)))
+                             (doseq [c (repeat 5 ".")]
+                               (print c)
+                               (flush)
+                               (Thread/sleep 1000))
+                             (recur)))))]
+     (and running? (active?)))))
 
 
 (defn- metrics
@@ -410,8 +410,8 @@
                          (when (some? stage)
                            (println)
                            (print-metrics stage metrics)))))))))
-    (println)
-    (println (format "Application %s has no active stage" id))))
+    (println))
+  (println (format "Application %s has no active stage" id)))
 
 
 (defn- fresh-app
@@ -523,7 +523,7 @@
                             (assoc app :executors (count pods))))
           add-duration  (fn [{:keys [age created-at terminated-at] :as app}]
                           (let [duration (if (some? terminated-at)
-                                           (duration (to-inst terminated-at) (to-inst created-at))
+                                           (duration (->inst terminated-at) (->inst created-at))
                                            age)]
                             (assoc app :duration duration)))]
       (comp
@@ -538,7 +538,7 @@
                  [(find-app (apps) id)]
                  (apps state))
         older? (fn [{:keys [created-at]}]
-                 (let [diff (.toDays (java.time.Duration/between (to-inst created-at) (now)))]
+                 (let [diff (.toDays (java.time.Duration/between (->inst created-at) (now)))]
                    (>= diff days)))
         apps   (cond->> apps
                  (some? days)   (filter older?)
@@ -686,6 +686,12 @@
       (exit (if ok? 0 1) exit-message)
       (binding [*verbose* (:verbose options)]
         (command {:action action :args options})))))
+
+
+(comment (let [apps (find-apps-by {:wide true})
+               apps (filter #(zero? (:executors %)) apps)]
+           (doseq [{:keys [id]} apps]
+             (delete id))))
 
 
 (run *command-line-args*)
