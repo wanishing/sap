@@ -688,11 +688,5 @@
         (command {:action action :args options})))))
 
 
-(comment (let [apps (find-apps-by {:wide true})
-               apps (filter #(zero? (:executors %)) apps)]
-           (doseq [{:keys [id]} apps]
-             (delete id))))
-
-
 (run *command-line-args*)
 
