@@ -21,7 +21,7 @@ jobs:
       uses: thedoctor0/zip-release@master
       with:
         type: 'tar'
-        filename: 'sap-${{ steps.get_version.outputs.version }}-macos.tar.gz'
+        filename: 'sap-${{ steps.version.outputs.version }}-macos.tar.gz'
         exclusions: '*.git* README.md'
 
     - name: Upload Release
