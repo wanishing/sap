@@ -1,0 +1,44 @@
+name: build
+
+on:
+  push:
+   tags:
+     - "*"
+
+jobs:
+  release-osx:
+    runs-on: macos-latest    
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Get Version
+      id: version
+      run: |
+        SAP_VERSION=$(cat resources/VERSION)
+        echo "##[set-output name=version;]${SAP_VERSION}"
+
+    - name: Create tag
+      uses: actions/github-script@v3
+      with:
+        github-token:  ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          github.git.createRef({
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          ref: "refs/tags/v${{ steps.version.outputs.version }}",
+          sha: context.sha
+          })
+
+    - name: Archive Release
+      uses: thedoctor0/zip-release@master
+      with:
+        type: 'tar'
+        filename: 'sap-${{ steps.version.outputs.version }}-macos.tar.gz'
+        exclusions: '*.git* README.md'
+
+    - name: Upload Release
+      uses: ncipollo/release-action@v1
+      with:
+        artifacts: "sap-${{ steps.version.outputs.version }}-macos.tar.gz"
+        token: ${{ secrets.GITHUB_TOKEN }}
+
