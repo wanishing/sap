@@ -34,6 +34,8 @@ jobs:
 
     - name: Bump homebrew-tap formula
       uses: mislav/bump-homebrew-formula-action@v1
+      env:
+        COMMITTER_TOKEN: ${{ secrets.COMMITTER_TOKEN }}
       with:
         formula-name: sap
         formula-path: sap.rb
