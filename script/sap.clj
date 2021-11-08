@@ -20,6 +20,12 @@
 (def ^:dynamic *verbose* nil)
 
 
+(defn- exit
+  [status msg]
+  (println msg)
+  (System/exit status))
+
+
 (defn- run-sh
   [& args]
   (when *verbose*
@@ -145,7 +151,7 @@
   ([start limit]
    (loop [port start]
      (cond
-       (>= port limit) nil
+       (>= port limit) (exit 1 "Unable to find available port")
        (not (busy? port)) port
        :else
        (recur (inc port))))))
@@ -371,7 +377,7 @@
   ([apps partial-id]
    (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
      app
-     (throw (ex-info "Failed to find app" {:id partial-id})))))
+     (exit 1 (format "Unable to find application \"%s\"" partial-id)))))
 
 
 (defn- running?
@@ -692,12 +698,6 @@
       {:action (validate-command commands cmd) :options options}
       :else
       {:exit-message (usage summary)})))
-
-
-(defn- exit
-  [status msg]
-  (println msg)
-  (System/exit status))
 
 
 (defn run

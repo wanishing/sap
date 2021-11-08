@@ -32,3 +32,13 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         prerelease: true
 
+    - name: Bump homebrew-tap formula
+      uses: mislav/bump-homebrew-formula-action@v1
+      with:
+        formula-name: sap
+        homebrew-tap: wanishing/homebrew-sap
+        download-url: "https://github.com/wanishing/sap/archive/refs/tags/sap-${{ steps.version.outputs.version }}-macos.tar.gz"
+
+
+
+
