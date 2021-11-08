@@ -38,7 +38,7 @@ jobs:
         formula-name: sap
         formula-path: sap.rb
         homebrew-tap: wanishing/homebrew-sap
-        download-url: "https://github.com/wanishing/sap/archive/refs/tags/sap-${{ steps.version.outputs.version }}-macos.tar.gz"
+        download-url: "https://github.com/wanishing/sap/releases/download/v${{ steps.version.outputs.version }}/sap-${{ steps.version.outputs.version }}-macos.tar.gz"
 
 
 
