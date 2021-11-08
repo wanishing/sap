@@ -660,7 +660,7 @@
         "  logs          alias for `kubectl logs` command"
         "  pods          display all pods associated to application"
         "  reapply       re-apply application (keeping the same id)"
-        "  metrics       display metrics of the current active stage"
+        "  metrics       display metrics of the current active stage(s)"
         ""]
        (str/join \newline)))
 
@@ -681,7 +681,7 @@
 (defn- validate-args
   [args]
   (let [{:keys [options arguments errors summary]} (parse-opts args cli-options)
-        cmd (validate-command commands (first arguments))]
+        cmd (first arguments)]
     (cond
       (:help options)
       {:exit-message (usage summary) :ok? true}
@@ -689,7 +689,7 @@
       {:exit-message (error-msg errors)}
       (and (= 1 (count arguments))
            cmd)
-      {:action cmd :options options}
+      {:action (validate-command commands cmd) :options options}
       :else
       {:exit-message (usage summary)})))
 

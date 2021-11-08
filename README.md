@@ -68,7 +68,7 @@ Make sure you have [kubectl](https://kubernetes.io/docs/tasks/tools/install-kube
   trainingsetjob-20211005-100854003036-cf7s5r7wgfnv            RUNNING      8m42s        112 
   ```
 
-* When you wish to perform action given application id, you can supply partially id rather than the full one:
+* When you wish to perform action given application id, you can supply partial id rather than the full one:
   ```
   ~ sap ls
   ID                                                           STATE        AGE      
