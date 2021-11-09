@@ -305,9 +305,9 @@
                :shuffle-read  (bytes-per-records shuffle-read-bytes shuffle-read-records)
                :tasks         {:succeeded num-complete-tasks
                                :failed    num-failed-tasks
-                               :active    (if (pos? num-active-tasks)
-                                            num-active-tasks
-                                            0)
+                               :active (if (neg? num-active-tasks)
+                                         (- num-active-tasks)
+                                         num-active-tasks)
                                :total     num-tasks}}
         nullable-fields (filter #(nil? (% stage))
                                 [:input :output :shuffle-read :shuffle-write])
@@ -682,8 +682,14 @@
 
 (defn- validate-command
   [commands input]
-  (let [cmds (filter #(and (str/starts-with? % input) %) commands)]
-    (when (= (count cmds) 1)
+  (let [cmds (filter #(and (str/starts-with? % input) %) commands)
+        found (count cmds)]
+    (cond
+      (> found 1)
+      (exit 1 (format "Given command \"%s\" is ambiguous.\nFound: %s" input (str/join ", " cmds)))
+      (zero? found)
+      (exit 1 (format "Unknown command \"%s\". \nRun --help for available commands" input))
+      (= 1 found)
       (first cmds))))
 
 
@@ -691,6 +697,7 @@
   [args]
   (let [{:keys [options arguments errors summary]} (parse-opts args cli-options)
         cmd (first arguments)]
+
     (cond
       (:help options)
       {:exit-message (usage summary) :ok? true}
