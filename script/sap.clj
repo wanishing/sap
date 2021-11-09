@@ -33,7 +33,9 @@
   (let [{:keys [out exit err]} (apply sh args)]
     (if (zero? exit)
       out
-      (throw (ex-info err {:command args :error err})))))
+      (exit 1 (format
+               "Failed execute command %s with %s"
+               (str/join " " args) err)))))
 
 
 (defn- run-proc
@@ -71,9 +73,11 @@
                     cols)
           fmts    (map #(str "%-" % "s") widths)
           fmt-row (fn [row]
-                    (apply str (interpose divider
-                                          (for [[col fmt] (map vector (map #(get row %) cols) fmts)]
-                                            (format fmt (str col))))))]
+                    (apply str
+                           (interpose divider
+                                      (for [[col fmt]
+                                            (map vector (map #(get row %) cols) fmts)]
+                                        (format fmt (str col))))))]
       (println (fmt-row (zipmap cols headers)))
       (doseq [row rows]
         (println (fmt-row row))))))
@@ -108,7 +112,9 @@
   (let [formatted-fields (->> fields
                               (map #(format "{%s}" %))
                               (str/join "{\"\\t\"}"))
-        jsonpath         (format "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}" formatted-fields)]
+        jsonpath         (format
+                          "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}"
+                          formatted-fields)]
     jsonpath))
 
 
@@ -119,11 +125,12 @@
                (= state given-state)) (spark-apps))
      (spark-apps)))
   ([]
-   (let [raw-apps (run-sh "kubectl" "get" "sparkapplication" (jsonpath
-                                                               [".metadata.name"
-                                                                ".metadata.creationTimestamp"
-                                                                ".status.applicationState.state"
-                                                                ".status.terminationTime"]))
+   (let [raw-apps (run-sh "kubectl" "get" "sparkapplication"
+                          (jsonpath
+                           [".metadata.name"
+                            ".metadata.creationTimestamp"
+                            ".status.applicationState.state"
+                            ".status.terminationTime"]))
          apps     (->> raw-apps
                        (str/split-lines)
                        (filter #(not (str/blank? %)))
@@ -176,17 +183,13 @@
         resp        (curl/get api {:headers headers
                                    :throw   false})
         ->snakecase (fn [s]
-                      (let [end      (count s)
-                            appender (fn [idx]
-                                       (let [c (nth s idx)]
-                                         (if (java.lang.Character/isUpperCase c)
-                                           (str "-" (str/lower-case c))
-                                           c)))]
-                        (loop [curr 0
-                               acc  ""]
-                          (if (= end curr)
-                            acc
-                            (recur (inc curr) (str acc (appender curr)))))))
+                      (->> s
+                           (partition-by #(java.lang.Character/isUpperCase %))
+                           (map (fn [subs]
+                                  (if (= (count subs) 1)
+                                    (str "-" (str/lower-case (first subs)))
+                                    (apply str subs))))
+                           (str/join)))
         body        (when (= (:status resp) 200)
                       (-> resp
                           :body
@@ -424,7 +427,7 @@
             (println (with-out-str
                        (clear)
                        (println "Name:" id)
-                       (println (format "Address: http://%s" (localhost port)))
+                       (println (format "UI: http://%s" (localhost port)))
                        (println "Application Id:" app-id)
                        (println "Executors Count:" (fetch-executors))
                        (doseq [{:keys [stage
