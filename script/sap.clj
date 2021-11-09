@@ -25,7 +25,9 @@
   (println msg)
   (System/exit status))
 
+
 (def fail (partial exit 1))
+
 
 (defn- run-sh
   [& args]
@@ -701,7 +703,6 @@
   [args]
   (let [{:keys [options arguments errors summary]} (parse-opts args cli-options)
         cmd (first arguments)]
-
     (cond
       (:help options)
       {:exit-message (usage summary) :ok? true}
