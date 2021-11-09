@@ -307,7 +307,7 @@
                                :failed    num-failed-tasks
                                :active    (if (pos? num-active-tasks)
                                             num-active-tasks
-                                            (- num-active-tasks))
+                                            0)
                                :total     num-tasks}}
         nullable-fields (filter #(nil? (% stage))
                                 [:input :output :shuffle-read :shuffle-write])
@@ -320,7 +320,10 @@
   (let [api (str endpoint (format "/api/v1/applications/%s/stages?status=active" id))
         stages     (get-by api)]
     (when (seq stages)
-      (map parse-stage stages))))
+      (->> stages
+           (map parse-stage)
+           (filter #(pos? (get-in % [:tasks :active])))
+           (sort-by :stage-id)))))
 
 
 (defn- fetch-executors-count
@@ -563,7 +566,7 @@
                (some? days)   (filter older?)
                (some? prefix) (filter (fn [{:keys [id]}]
                                         (str/starts-with? id prefix)))
-               (some? wide)   (into [] @wide-info))]
+               (some? wide)   (into  [] @wide-info))]
     apps))
 
 
