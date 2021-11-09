@@ -34,8 +34,8 @@
     (if (zero? exit)
       out
       (exit 1 (format
-               "Failed execute command %s with %s"
-               (str/join " " args) err)))))
+                "Failed execute command %s with %s"
+                (str/join " " args) err)))))
 
 
 (defn- run-proc
@@ -113,8 +113,8 @@
                               (map #(format "{%s}" %))
                               (str/join "{\"\\t\"}"))
         jsonpath         (format
-                          "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}"
-                          formatted-fields)]
+                           "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}"
+                           formatted-fields)]
     jsonpath))
 
 
@@ -127,10 +127,10 @@
   ([]
    (let [raw-apps (run-sh "kubectl" "get" "sparkapplication"
                           (jsonpath
-                           [".metadata.name"
-                            ".metadata.creationTimestamp"
-                            ".status.applicationState.state"
-                            ".status.terminationTime"]))
+                            [".metadata.name"
+                             ".metadata.creationTimestamp"
+                             ".status.applicationState.state"
+                             ".status.terminationTime"]))
          apps     (->> raw-apps
                        (str/split-lines)
                        (filter #(not (str/blank? %)))
@@ -664,7 +664,7 @@
         ""
         "Actions:"
         "  delete        delete application"
-        "  cleanup       delete COMPLETED/FAILED/Failed applications"
+        "  cleanup       delete COMPLETED/FAILED applications"
         "  ls            list applications"
         "  ui            port-forwarding application ui given id"
         "  get           alias for `kubectl get -o yaml` command"
