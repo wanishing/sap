@@ -25,18 +25,18 @@
   (println msg)
   (System/exit status))
 
+(def fail (partial exit 1))
 
 (defn- run-sh
   [& args]
   (when *verbose*
     (println (str/join " " args)))
-  (let [fail (partial exit 1)
-        {:keys [out exit err]} (apply sh args)]
+  (let [{:keys [out exit err]} (apply sh args)]
     (if (zero? exit)
       out
       (fail (format
-             "Failed to execute command:\n\"%s\"\nError:\n%s"
-             (str/join " " args) err)))))
+              "Failed to execute command:\n \"%s\"\nError:\n %s"
+              (str/join " " args) err)))))
 
 
 (defn- run-proc
@@ -159,7 +159,7 @@
   ([start limit]
    (loop [port start]
      (cond
-       (>= port limit) (exit 1 "Unable to find available port")
+       (>= port limit) (fail "Unable to find available port")
        (not (busy? port)) port
        :else
        (recur (inc port))))))
@@ -384,7 +384,7 @@
   ([apps partial-id]
    (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
      app
-     (exit 1 (format "Unable to find application \"%s\"" partial-id)))))
+     (fail (format "Unable to find application \"%s\"" partial-id)))))
 
 
 (defn- running?
@@ -690,9 +690,9 @@
         found (count cmds)]
     (cond
       (> found 1)
-      (exit 1 (format "Given command \"%s\" is ambiguous.\nFound: %s" input (str/join ", " cmds)))
+      (fail (format "Given command \"%s\" is ambiguous.\nFound: %s" input (str/join ", " cmds)))
       (zero? found)
-      (exit 1 (format "Unknown command \"%s\". \nRun --help for available commands" input))
+      (fail (format "Unknown command \"%s\". \nRun --help for available commands" input))
       (= 1 found)
       (first cmds))))
 
