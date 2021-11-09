@@ -30,12 +30,13 @@
   [& args]
   (when *verbose*
     (println (str/join " " args)))
-  (let [{:keys [out exit err]} (apply sh args)]
+  (let [fail (partial exit 1)
+        {:keys [out exit err]} (apply sh args)]
     (if (zero? exit)
       out
-      (exit 1 (format
-                "Failed execute command %s with %s"
-                (str/join " " args) err)))))
+      (fail (format
+             "Failed to execute command:\n\"%s\"\nError:\n%s"
+             (str/join " " args) err)))))
 
 
 (defn- run-proc
