@@ -11,7 +11,9 @@ Make sure you have [kubectl](https://kubernetes.io/docs/tasks/tools/install-kube
 
 * Delete application(s)
 
-* Re-apply application(s) 
+* Re-apply application(s)
+
+* Get realtime metrics of current running stage(s)
 
 * Open application UI
 
