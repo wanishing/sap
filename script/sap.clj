@@ -7,6 +7,7 @@
     [cheshire.core :as json]
     [clj-yaml.core :as yaml]
     [clojure.core.async :as async]
+    [clojure.java.io :as io]
     [clojure.java.shell :refer [sh]]
     [clojure.pprint :refer [cl-format]]
     [clojure.string :as str]
@@ -161,10 +162,12 @@
   ([start limit]
    (loop [port start]
      (cond
-       (>= port limit) (fail "Unable to find available port")
-       (not (busy? port)) port
+       (>= port limit)
+         (fail "Unable to find available port")
+       (not (busy? port))
+         port
        :else
-       (recur (inc port))))))
+         (recur (inc port))))))
 
 
 (defn- spark-ui
@@ -484,7 +487,7 @@
   [{:keys [id]} {:keys [image]}]
   (let [raw-app   (yaml id)
         fresh-app (cond-> (fresh-app raw-app)
-                    (some? image) (assoc-in [:spec :image] image))
+                      (some? image) (assoc-in [:spec :image] image))
         fresh-app (yaml/generate-string fresh-app)
         fname     (format "/tmp/%s.yaml" id)]
     (spit fname fresh-app)
@@ -496,7 +499,7 @@
 (defn- get-yaml
   [{:keys [id]} {:keys [fresh]}]
   (let [yaml (cond-> (yaml id)
-               (some? fresh) (fresh-app))]
+                 (some? fresh) (fresh-app))]
     (println (yaml/generate-string yaml))))
 
 
@@ -569,10 +572,10 @@
                  (let [diff (.toDays (java.time.Duration/between (->inst created-at) (now)))]
                    (>= diff days)))
         apps (cond->> apps
-               (some? days)   (filter older?)
-               (some? prefix) (filter (fn [{:keys [id]}]
-                                        (str/starts-with? id prefix)))
-               (some? wide)   (into  [] @wide-info))]
+                 (some? days) (filter older?)
+                 (some? prefix) (filter (fn [{:keys [id]}]
+                                          (str/starts-with? id prefix)))
+                 (some? wide) (into  [] @wide-info))]
     apps))
 
 
@@ -653,6 +656,7 @@
    [nil "--image IMAGE" "When combined with `reapply`, the job will be re-applied with given image"]
    ["-w" "--wide"]
    ["-v" "--verbose"]
+   [nil "--version"]
    ["-h" "--help"]])
 
 
@@ -686,17 +690,22 @@
        (str/join \newline errors)))
 
 
+(defn- version
+  []
+  (slurp (io/file "./resources/VERSION")))
+
+
 (defn- validate-command
   [commands input]
   (let [cmds (filter #(and (str/starts-with? % input) %) commands)
         found (count cmds)]
     (cond
       (> found 1)
-      (fail (format "Given command \"%s\" is ambiguous.\nFound: %s" input (str/join ", " cmds)))
+        (fail (format "Given command \"%s\" is ambiguous.\nFound: %s" input (str/join ", " cmds)))
       (zero? found)
-      (fail (format "Unknown command \"%s\". \nRun --help for available commands" input))
+        (fail (format "Unknown command \"%s\". \nRun --help for available commands" input))
       (= 1 found)
-      (first cmds))))
+        (first cmds))))
 
 
 (defn- validate-args
@@ -704,15 +713,17 @@
   (let [{:keys [options arguments errors summary]} (parse-opts args cli-options)
         cmd (first arguments)]
     (cond
+      (:version options)
+        {:exit-message (version) :ok? true}
       (:help options)
-      {:exit-message (usage summary) :ok? true}
+        {:exit-message (usage summary) :ok? true}
       errors
-      {:exit-message (error-msg errors)}
+        {:exit-message (error-msg errors)}
       (and (= 1 (count arguments))
            cmd)
-      {:action (validate-command commands cmd) :options options}
+        {:action (validate-command commands cmd) :options options}
       :else
-      {:exit-message (usage summary)})))
+        {:exit-message (usage summary)})))
 
 
 (defn run
