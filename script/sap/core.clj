@@ -1,67 +1,24 @@
 #!/usr/bin/env bb
-(ns sap
+(ns sap.core
   (:require
-    [babashka.curl :as curl]
-    [babashka.process :refer [process]]
-    [babashka.wait :as wait]
-    [cheshire.core :as json]
-    [clj-yaml.core :as yaml]
-    [clojure.core.async :as async]
-    [clojure.java.shell :refer [sh]]
-    [clojure.pprint :refer [cl-format]]
-    [clojure.string :as str]
-    [clojure.tools.cli :refer [parse-opts]])
+   [babashka.curl :as curl]
+   [babashka.wait :as wait]
+   [sap.client :as client]
+   [sap.utils :as utils]
+   [cheshire.core :as json]
+   [clj-yaml.core :as yaml]
+   [clojure.core.async :as async]
+   [clojure.pprint :refer [cl-format]]
+   [clojure.string :as str]
+   [clojure.tools.cli :refer [parse-opts]])
   (:import
-    (java.net
-      Socket
-      SocketException)))
-
+   (java.net
+    Socket
+    SocketException)))
 
 (def ^:dynamic *verbose* nil)
 
-
-(defn- exit
-  [status msg]
-  (println msg)
-  (System/exit status))
-
-
-(def fail (partial exit 1))
-
-
-(defn- run-sh
-  [& args]
-  (when *verbose*
-    (println (str/join " " args)))
-  (let [{:keys [out exit err]} (apply sh args)]
-    (if (zero? exit)
-      out
-      (fail (format
-              "Failed to execute command:\n \"%s\"\nError:\n %s"
-              (str/join " " args) err)))))
-
-
-(defn- run-proc
-  [& args]
-  (when *verbose*
-    (println (str/join " " args)))
-  @(process args {:out :inherit})
-  nil)
-
-
-(defn- now
-  []
-  (java.time.Instant/now))
-
-
-(defn- ->inst
-  [s]
-  (java.time.Instant/parse s))
-
-
-(defn- at-utc
-  [inst]
-  (.atZone inst java.time.ZoneOffset/UTC))
+(def fail (partial utils/exit 1))
 
 
 (defn- print-rows
@@ -79,73 +36,11 @@
                     (apply str
                            (interpose divider
                                       (for [[col fmt]
-                                            (map vector (map #(get row %) cols) fmts)]
-                                        (format fmt (str col))))))]
+                                                                                                                                                         (map vector (map #(get row %) cols) fmts)]
+                                                                                                                                                     (format fmt (str col))))))]
       (println (fmt-row (zipmap cols headers)))
       (doseq [row rows]
         (println (fmt-row row))))))
-
-
-(defn- duration
-  [start end]
-  (let [diff   (java.time.Duration/between end start)
-        units  [[(.toDays diff) "d"]
-                [(mod (.toHours diff) 24) "h"]
-                [(mod (.toMinutes diff) 60) "m"]
-                [(mod (.toSeconds diff) 60) "s"]]
-        result (->> units
-                    (filter (fn [[diff _]] (pos? diff)))
-                    (map (fn [[diff unit]] (format "%d%s" diff unit)))
-                    (str/join))]
-    result))
-
-
-(defn- parse-app
-  [[id created-at state terminated-at]]
-  {:id            id
-   :state         (or state "UNKNOWN")
-   :created-at    created-at
-   :terminated-at (if (= terminated-at "<nil>") nil terminated-at)
-   :driver   (format "%s-driver" id)
-   :age      (duration (now) (->inst created-at))})
-
-
-(defn- jsonpath
-  [fields]
-  (let [formatted-fields (->> fields
-                              (map #(format "{%s}" %))
-                              (str/join "{\"\\t\"}"))
-        jsonpath         (format
-                           "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}"
-                           formatted-fields)]
-    jsonpath))
-
-
-(defn- spark-apps
-  ([state]
-   (if-let [given-state (and (some? state) (str/upper-case state))]
-     (filter (fn [{:keys [state]}]
-               (= state given-state)) (spark-apps))
-     (spark-apps)))
-  ([]
-   (let [raw-apps (run-sh "kubectl" "get" "sparkapplication"
-                          (jsonpath
-                            [".metadata.name"
-                             ".metadata.creationTimestamp"
-                             ".status.applicationState.state"
-                             ".status.terminationTime"]))
-         apps     (->> raw-apps
-                       (str/split-lines)
-                       (filter #(not (str/blank? %)))
-                       (map #(str/split % #"\t"))
-                       (map parse-app))]
-     apps)))
-
-
-(defn- forward-port
-  [driver port]
-  (run-sh "kubectl" "port-forward" driver (format "%s:4040" port)))
-
 
 (defn- busy?
   [port]
@@ -172,7 +67,7 @@
   (let [port  (find-free-port)]
     (println "Port forwarding" driver
              (format "to http://localhost:%s..." port))
-    (forward-port driver port)))
+    (client/forward-port driver port)))
 
 
 (defn- localhost
@@ -204,7 +99,7 @@
   [millis]
   (if (or (nil? millis) (zero? millis))
     "0.0ms"
-    (let [inst  (at-utc (java.time.Instant/ofEpochMilli millis))
+    (let [inst  (utils/at-utc (java.time.Instant/ofEpochMilli millis))
           units [[(.getHour inst) "h"]
                  [(.getMinute inst) "m"]
                  [(.getSecond inst) "s"]
@@ -301,9 +196,9 @@
                :duration      (let [sbt (java.time.ZonedDateTime/parse submission-time
                                                                        (java.time.format.DateTimeFormatter/ofPattern
                                                                          "yyyy-MM-dd'T'HH:mm:ss.SSSz"))
-                                    sbt (at-utc (.toInstant sbt))
-                                    now (at-utc (now))]
-                                (duration now sbt))
+                                    sbt (utils/at-utc (.toInstant sbt))
+                                    now (utils/at-utc (utils/now))]
+                                (utils/duration now sbt))
                :description   (or (and description (first (str/split-lines description))) name)
                :input         (bytes-per-records input-bytes input-records)
                :output        (bytes-per-records output-bytes output-records)
@@ -395,12 +290,12 @@
      (= state "RUNNING")))
   ([id fetch-stage]
    (let [running? (running? id)
-         active?  #(let [start (.minusSeconds (now) 1)]
+         active?  #(let [start (.minusSeconds (utils/now) 1)]
                      (loop []
                        (if (some? (fetch-stage)) true
                            (do
                              (clear)
-                             (print (format "\rWaiting for active stage for %s" (duration (now) start)))
+                             (print (format "\rWaiting for active stage for %s" (utils/duration (utils/now) start)))
                              (doseq [c (repeat 5 ".")]
                                (print c)
                                (flush)
@@ -413,7 +308,7 @@
   [{:keys [driver id]} _]
   (when (running? id)
     (let [port       (find-free-port)]
-      (async/thread (forward-port driver port))
+      (async/thread (client/forward-port driver port))
       (wait/wait-for-port "localhost" port)
       (let [endpoint      (localhost port)
             app-id        (fetch-app endpoint)
@@ -451,38 +346,31 @@
                            (dissoc :status))]
     fresh-app))
 
-
-(defn- yaml
-  [id]
-  (run-sh "kubectl" "get" "sparkapplication" id "-o" "yaml"))
-
-
 (defn- delete
   ([{:keys [id]} _]
    (delete id))
   ([id]
-   (run-proc "kubectl" "delete" "sparkapplication" id)))
+   (client/delete id)))
 
 
 (defn- describe
   [{:keys [id]} _]
-  (run-proc "kubectl" "describe" "sparkapplication" id))
+  (client/describe id))
 
 
 (defn- logs
   [{:keys [driver]} _]
-  (run-proc "kubectl" "logs" "-f" driver))
+  (client/logs driver))
 
 
 (defn- pods
   [{:keys [id]} _]
-  (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
-    (run-proc "kubectl" "get" "pods" "-l" label)))
+  (client/pods id))
 
 
 (defn- reapply
   [{:keys [id]} {:keys [image]}]
-  (let [raw-app   (yaml id)
+  (let [raw-app   (client/yaml id)
         fresh-app (cond-> (fresh-app raw-app)
                     (some? image) (assoc-in [:spec :image] image))
         fresh-app (yaml/generate-string fresh-app)
@@ -490,12 +378,12 @@
     (spit fname fresh-app)
     (println (format "Fresh app created at %s" fname))
     (delete id)
-    (run-proc "kubectl" "apply" "-f" fname)))
+    (client/apply-app fname)))
 
 
 (defn- get-yaml
   [{:keys [id]} {:keys [fresh]}]
-  (let [yaml (cond-> (yaml id)
+  (let [yaml (cond-> (client/yaml id)
                (some? fresh) (fresh-app))]
     (println (yaml/generate-string yaml))))
 
@@ -506,7 +394,7 @@
 (def command-by-name
   {:delete delete
 
-   :apps spark-apps
+   :apps client/apps
 
    :ui spark-ui
 
@@ -528,22 +416,6 @@
   (get-in command-by-name [cmd]))
 
 
-(defn- fetch-executors
-  []
-  (let [parse (fn [extr]
-                (let [[pod, labels] (str/split extr #"\t")
-                      app (-> labels
-                              (json/parse-string true)
-                              (:sparkoperator.k8s.io/app-name))]
-                  {:executor pod :app app}))
-        executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" (jsonpath
-                                                                                   [".metadata.name"
-                                                                                    ".metadata.labels"]))
-                       (str/split-lines)
-                       (map parse))]
-    executors))
-
-
 (def wide-info
   (delay
     (let [add-executors (fn [executors {:keys [id] :as app}]
@@ -551,12 +423,12 @@
                             (assoc app :executors (count pods))))
           add-duration  (fn [{:keys [age created-at terminated-at] :as app}]
                           (let [duration (if (some? terminated-at)
-                                           (duration (->inst terminated-at) (->inst created-at))
+                                           (utils/duration (utils/->inst terminated-at) (utils/->inst created-at))
                                            age)]
                             (assoc app :duration duration)))]
       (comp
         (map add-duration)
-        (map (partial add-executors (fetch-executors)))))))
+        (map (partial add-executors (client/fetch-executors)))))))
 
 
 (defn- find-apps-by
@@ -566,7 +438,7 @@
                [(find-app (apps) id)]
                (apps state))
         older? (fn [{:keys [created-at]}]
-                 (let [diff (.toDays (java.time.Duration/between (->inst created-at) (now)))]
+                 (let [diff (.toDays (java.time.Duration/between (utils/->inst created-at) (utils/now)))]
                    (>= diff days)))
         apps (cond->> apps
                (some? days)   (filter older?)
@@ -719,10 +591,11 @@
   [args]
   (let [{:keys [action options exit-message ok?]} (validate-args args)]
     (if exit-message
-      (exit (if ok? 0 1) exit-message)
+      (utils/exit (if ok? 0 1) exit-message)
       (binding [*verbose* (:verbose options)]
         (command {:action action :args options})))))
 
 
 (run *command-line-args*)
+
 
