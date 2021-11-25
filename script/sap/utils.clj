@@ -1,6 +1,7 @@
 (ns sap.utils
   (:require
-   [clojure.string :as str]))
+    [clojure.string :as str]))
+
 
 (defn exit
   [status msg]

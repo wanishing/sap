@@ -1,19 +1,21 @@
 (ns sap.client
   (:require
-   [babashka.curl :as curl]
-   [babashka.process :refer [process]]
-   [sap.utils :as utils]
-   [cheshire.core :as json]
-   [clj-yaml.core :as yaml]
-   [clojure.java.shell :refer [sh]]
-   [clojure.string :as str])
+    [babashka.curl :as curl]
+    [babashka.process :refer [process]]
+    [cheshire.core :as json]
+    [clj-yaml.core :as yaml]
+    [clojure.java.shell :refer [sh]]
+    [clojure.string :as str]
+    [sap.utils :as utils])
   (:import
-   java.util.Base64))
+    java.util.Base64))
+
 
 (def ^:dynamic *verbose* nil)
 
 
 (def fail (partial utils/exit 1))
+
 
 (defn- run-sh
   [& args]
@@ -23,8 +25,8 @@
     (if (zero? exit)
       out
       (fail (format
-             "Failed to execute command:\n \"%s\"\nError:\n %s"
-             (str/join " " args) err)))))
+              "Failed to execute command:\n \"%s\"\nError:\n %s"
+              (str/join " " args) err)))))
 
 
 (defn- run-proc
@@ -44,15 +46,17 @@
    :driver   (format "%s-driver" id)
    :age      (utils/duration created-at)})
 
+
 (defn- jsonpath
   [fields]
   (let [formatted-fields (->> fields
                               (map #(format "{%s}" %))
                               (str/join "{\"\\t\"}"))
         jsonpath         (format
-                          "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}"
-                          formatted-fields)]
+                           "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}"
+                           formatted-fields)]
     jsonpath))
+
 
 (defn forward-port
   [driver port]
@@ -63,21 +67,27 @@
   [driver]
   (run-proc "kubectl" "logs" "-f" driver))
 
+
 (defn describe
   [id]
   (run-proc "kubectl" "describe" "sparkapplication" id))
 
-(defn delete [id]
+
+(defn delete
+  [id]
   (run-proc "kubectl" "delete" "sparkapplication" id))
+
 
 (defn yaml
   [id]
   (run-sh "kubectl" "get" "sparkapplication" id "-o" "yaml"))
 
+
 (defn pods
   [id]
   (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
     (run-proc "kubectl" "get" "pods" "-l" label)))
+
 
 (defn apply-app
   [file]
@@ -93,16 +103,17 @@
   ([]
    (let [raw-apps (run-sh "kubectl" "get" "sparkapplication"
                           (jsonpath
-                           [".metadata.name"
-                            ".metadata.creationTimestamp"
-                            ".status.applicationState.state"
-                            ".status.terminationTime"]))
+                            [".metadata.name"
+                             ".metadata.creationTimestamp"
+                             ".status.applicationState.state"
+                             ".status.terminationTime"]))
          apps     (->> raw-apps
                        (str/split-lines)
                        (filter #(not (str/blank? %)))
                        (map #(str/split % #"\t"))
                        (map parse-app))]
      apps)))
+
 
 (defn fetch-executors
   []
@@ -113,11 +124,12 @@
                               (:sparkoperator.k8s.io/app-name))]
                   {:executor pod :app app}))
         executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" (jsonpath
-                                                                                  [".metadata.name"
-                                                                                   ".metadata.labels"]))
+                                                                                   [".metadata.name"
+                                                                                    ".metadata.labels"]))
                        (str/split-lines)
                        (map parse))]
     executors))
+
 
 (comment
   
