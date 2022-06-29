@@ -1,0 +1,52 @@
+{:paths ["."]
+ :tasks
+ {:requires ([babashka.fs :as fs]
+             [build-shared :as bs]
+             [clojure.string :as str])
+  :init (do
+          (def windows? (str/starts-with? (System/getProperty "os.name")
+                                          "Windows")))
+
+  clean {:doc "Clean target dir"
+         :task (doseq [dir [bs/build-folder]]
+                 (fs/delete-tree dir))}
+
+  run-main {:doc "Run main"
+            :task (apply clojure "-M -m sap.core" *command-line-args*)}
+
+  uberjar {:doc "Builds uberjar"
+           :task (when (seq (fs/modified-since bs/build-folder
+                                               ["deps.edn" "build.clj" "src"]))
+                   (clojure "-T:build uber"))}
+
+  run-uber {:doc "Run uberjar"
+            :depends [uberjar]
+            :task (apply shell "java -jar" bs/uber-file *command-line-args*)}
+
+  graalvm {:doc "Checks GRAALVM_HOME env var"
+           :task
+           (let [env (System/getenv "GRAALVM_HOME")]
+             (assert env "Set GRAALVM_HOME")
+             env)}
+
+  native-image {:doc "Builds native image"
+                :depends [graalvm uberjar]
+                :task (do
+                        (shell (str (fs/file graalvm
+                                             "bin"
+                                             (if windows?
+                                               "gu.cmd"
+                                               "gu")))
+                               "install" "native-image")
+                        (shell (str (fs/file graalvm
+                                             "bin"
+                                             (if windows?
+                                               "native-image.cmd"
+                                               "native-image")))
+                               "-jar" bs/uber-file
+                               "--no-fallback"
+                               "--initialize-at-build-time=com.fasterxml.jackson"
+                               "-H:Log=registerResource:"
+                               "-H:IncludeResources=VERSION"
+                               (format "-H:Name=%s" bs/app-name))
+                        (println (format "Created %s executable" bs/app-name)))}}}
