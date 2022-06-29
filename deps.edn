@@ -1,0 +1,13 @@
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.10.3"}
+        org.clojure/tools.cli {:mvn/version "1.0.206"}
+        cheshire/cheshire {:mvn/version "5.8.1"}
+        clj-commons/clj-yaml {:mvn/version "0.7.108"}
+        babashka/process {:mvn/version "0.1.4"}}
+ :aliases
+ {:native-deps
+  {:extra-deps
+   {com.github.clj-easy/graal-build-time {:mvn/version "0.1.0"}}}
+  :build {:deps
+          {io.github.clojure/tools.build {:git/tag "v0.3.0" :git/sha "e418fc9"}}
+          :ns-default build}}}

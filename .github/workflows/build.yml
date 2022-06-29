@@ -6,43 +6,68 @@ on:
      - "*"
 
 jobs:
-  release-osx:
-    runs-on: macos-latest    
+  build:
+    name: sap on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-11, ubuntu-22.04]
     steps:
-    - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
-    - name: Get Version
-      id: version
-      run: |
-        SAP_VERSION=$(cat resources/VERSION)
-        echo "##[set-output name=version;]${SAP_VERSION}"
+      - name: Get Version
+        id: version
+        run: |
+          VERSION=$(cat resources/VERSION)
+          echo "##[set-output name=version;]${VERSION}"
 
-    - name: Archive Release
-      uses: thedoctor0/zip-release@master
-      with:
-        type: 'tar'
-        path: 'script'
-        filename: 'sap-${{ steps.version.outputs.version }}-macos.tar.gz'
-        exclusions: '*.git* README.md resources'
+      - name: Prepare java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '11'
 
-    - name: Upload Release
-      uses: ncipollo/release-action@v1
-      with:
-        artifacts: "sap-${{ steps.version.outputs.version }}-macos.tar.gz"
-        bodyFile: "resources/release-notes/v${{ steps.version.outputs.version }}.md"
-        token: ${{ secrets.GITHUB_TOKEN }}
-        prerelease: true
+      - name: Install clojure tools
+        uses: DeLaGuardo/setup-clojure@7.0
+        with:
+          cli: 1.10.3.1075
+          bb: 0.7.8
 
-    - name: Bump homebrew-tap formula
-      uses: mislav/bump-homebrew-formula-action@v1
-      env:
-        COMMITTER_TOKEN: ${{ secrets.HOMEBREW_SAP }}
-      with:
-        formula-name: sap
-        formula-path: sap.rb
-        homebrew-tap: wanishing/homebrew-sap
-        download-url: "https://github.com/wanishing/sap/releases/download/v${{ steps.version.outputs.version }}/sap-${{ steps.version.outputs.version }}-macos.tar.gz"
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          version: '22.1.0'
+          java-version: '11'
+          components: 'native-image'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build uberjar
+        run: bb uberjar
 
+      - name: Build native-image
+        run: bb native-image
 
+      - name: Archive Release
+        uses: thedoctor0/zip-release@master
+        with:
+          type: 'zip'
+          filename: 'sap-${{ steps.version.outputs.version }}-${{ matrix.os }}.zip'
+          exclusions: '*.git*  README.*'
+
+      - name: Upload Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: 'sap-${{ steps.version.outputs.version }}-${{ matrix.os }}.zip'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: true
+          allowUpdates: true
+
+      - name: Bump homebrew-tap formula
+        uses: mislav/bump-homebrew-formula-action@v1
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_SAP }}
+          with:
+            formula-name: sap
+            formula-path: sap.rb
+            homebrew-tap: wanishing/homebrew-sap
+            download-url: "https://github.com/wanishing/sap/releases/download/v${{ steps.version.outputs.version }}/sap-${{ steps.version.outputs.version }}-${{ matrix.os }}.zip"
 

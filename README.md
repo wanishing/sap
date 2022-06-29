@@ -13,8 +13,6 @@ Make sure you have [kubectl](https://kubernetes.io/docs/tasks/tools/install-kube
 
 * Re-apply application(s)
 
-* Get realtime metrics of current running stage(s)
-
 * Open application UI
 
 * Get logs of application
