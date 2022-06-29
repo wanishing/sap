@@ -65,9 +65,9 @@ jobs:
         uses: mislav/bump-homebrew-formula-action@v1
         env:
           COMMITTER_TOKEN: ${{ secrets.HOMEBREW_SAP }}
-          with:
-            formula-name: sap
-            formula-path: sap.rb
-            homebrew-tap: wanishing/homebrew-sap
-            download-url: "https://github.com/wanishing/sap/releases/download/v${{ steps.version.outputs.version }}/sap-${{ steps.version.outputs.version }}-${{ matrix.os }}.zip"
+        with:
+          formula-name: sap
+          formula-path: sap.rb
+          nhomebrew-tap: wanishing/homebrew-sap
+          download-url: "https://github.com/wanishing/sap/releases/download/v${{ steps.version.outputs.version }}/sap-${{ steps.version.outputs.version }}-${{ matrix.os }}.zip"
 
