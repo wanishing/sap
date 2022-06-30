@@ -2,6 +2,8 @@ name: build
 
 on:
   push:
+   branches:
+     - 'master'
    tags:
      - "*"
 
@@ -51,18 +53,3 @@ jobs:
       - name: Build native-image
         run: |
           bb native-image
-
-      - name: Archive Release
-        uses: thedoctor0/zip-release@master
-        with:
-          type: 'zip'
-          filename: 'sap-${{ steps.version.outputs.version }}-${{ matrix.os }}.zip'
-          exclusions: '*.git*  README.*'
-
-      - name: Upload Release
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: 'sap-${{ steps.version.outputs.version }}-${{ matrix.os }}.zip'
-          token: ${{ secrets.GITHUB_TOKEN }}
-          prerelease: true
-          allowUpdates: true
