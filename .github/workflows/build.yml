@@ -40,6 +40,10 @@ jobs:
           components: 'native-image'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: clean
+        run: |
+          bb clean
+
       - name: Build uberjar
         run: |
           bb uberjar
