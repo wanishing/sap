@@ -11,7 +11,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [macos-11]
+        os: [macos-11, ubuntu-22.04]
     steps:
       - uses: actions/checkout@v3
 
@@ -41,10 +41,12 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build uberjar
-        run: bb uberjar
+        run: |
+          bb uberjar
 
       - name: Build native-image
-        run: bb native-image
+        run: |
+          bb native-image
 
       - name: Archive Release
         uses: thedoctor0/zip-release@master
