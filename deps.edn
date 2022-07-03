@@ -1,6 +1,6 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.10.3"}
-        org.clojure/tools.cli {:mvn/version "1.0.206"}
+        org.clojure/tools.cli {:mvn/version "1.11.1.1149"}
         cheshire/cheshire {:mvn/version "5.8.1"}
         clj-commons/clj-yaml {:mvn/version "0.7.108"}
         babashka/process {:mvn/version "0.1.4"}}
