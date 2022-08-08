@@ -187,7 +187,7 @@
 (defn- fresh-app
   [raw-app]
   (let [app            (yaml/parse-string raw-app)
-        fresh-metadata (select-keys (:metadata app) [:name :namespace])
+        fresh-metadata (select-keys (:metadata app) [:name :namespace :labels])
         fresh-app      (-> app
                            (assoc :metadata fresh-metadata)
                            (dissoc :status))]
