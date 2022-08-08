@@ -424,7 +424,7 @@
 
 (defn- version
   []
-  (slurp (io/file "./resources/VERSION")))
+  (slurp (io/resource "VERSION")))
 
 
 (defn- validate-command
