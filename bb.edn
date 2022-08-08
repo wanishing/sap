@@ -17,7 +17,7 @@
   uberjar {:doc "Builds uberjar"
            :task (when (seq (fs/modified-since bs/build-folder
                                                ["deps.edn" "build.clj" "src"]))
-                   (clojure "-T:build uber --report stderr"))}
+                   (clojure "--report stderr -T:build uber"))}
 
   run-uber {:doc "Run uberjar"
             :depends [uberjar]
