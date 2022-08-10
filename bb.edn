@@ -8,8 +8,10 @@
                                           "Windows")))
 
   clean {:doc "Clean target dir"
-         :task (doseq [dir [bs/build-folder]]
-                 (fs/delete-tree dir))}
+         :task (do
+                 (fs/delete-if-exists bs/app-name)
+                 (doseq [dir [bs/build-folder]]
+                   (fs/delete-tree dir)))}
 
   run-main {:doc "Run main"
             :task (apply clojure "-M -m sap.core" *command-line-args*)}
@@ -43,13 +45,5 @@
                                              (if windows?
                                                "native-image.cmd"
                                                "native-image")))
-                               "-jar" bs/uber-file
-                               "--no-fallback"
-                               "--initialize-at-build-time=com.fasterxml.jackson"
-                               "-H:ReflectionConfigurationFiles=resources/reflect-config.json"
-                               "-H:+ReportExceptionStackTraces"
-                               "-H:Log=registerResource:"
-                               "-H:IncludeResources=VERSION"
-                               (format "-H:Name=%s" bs/app-name)
-                               "--verbose")
+                               "-jar" bs/uber-file)
                         (println (format "Created %s executable" bs/app-name)))}}}

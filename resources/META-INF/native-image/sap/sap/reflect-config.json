@@ -1,0 +1,48 @@
+[
+
+{
+  "name":"java.lang.reflect.Array"
+},
+{
+  "name":"java.lang.reflect.Constructor"
+},
+{
+  "name":"java.lang.reflect.Field"
+},
+{
+  "name":"java.lang.reflect.Method",
+  "methods":[{"name":"canAccess","parameterTypes":["java.lang.Object"] }]
+},
+{
+  "name":"java.lang.reflect.Modifier"
+},
+{
+  "name":"java.net.InetAddress"
+},
+{
+  "name":"java.net.MalformedURLException"
+},
+{
+  "name":"java.net.ServerSocket"
+},
+{
+  "name":"java.net.Socket",
+  "queryAllPublicConstructors":true,
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String","int"] }]
+},
+{
+  "name":"java.net.SocketException"
+},
+{
+  "name":"java.net.URI"
+},
+{
+  "name":"java.net.URL"
+},
+{
+  "name":"java.net.URLDecoder"
+},
+{
+  "name":"java.net.URLEncoder"
+}
+]
