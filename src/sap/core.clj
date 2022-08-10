@@ -2,61 +2,21 @@
 (ns sap.core
   (:gen-class)
   (:require
-    [babashka.process :refer [process]]
-    [cheshire.core :refer [parse-string]]
-    [clj-yaml.core :as yaml]
     [clojure.java.io :as io]
-    [clojure.java.shell :refer [sh]]
     [clojure.string :as str]
-    [clojure.tools.cli :refer [parse-opts]])
-  (:import
-    (java.net
-      Socket
-      SocketException)))
+    [clojure.tools.cli :refer [parse-opts]]
+    [sap.client :as client]
+    [sap.commands.delete :refer [delete]]
+    [sap.commands.describe :refer [describe]]
+    [sap.commands.logs :refer [logs]]
+    [sap.commands.pods :refer [pods]]
+    [sap.commands.reapply :refer [reapply]]
+    [sap.commands.ui :refer [ui]]
+    [sap.commands.yaml :refer [yaml]]
+    [sap.utils :refer [fail now ->inst exit duration]]))
 
 
 (def ^:dynamic *verbose* nil)
-
-
-(defn- exit
-  ([status]
-   (System/exit status))
-  ([status msg]
-   (println msg)
-   (exit status)))
-
-
-(def fail (partial exit 1))
-
-
-(defn- run-sh
-  [& args]
-  (when *verbose*
-    (println (str/join " " args)))
-  (let [{:keys [out exit err]} (apply sh args)]
-    (if (zero? exit)
-      out
-      (fail (format
-              "Failed to execute command:\n \"%s\"\nError:\n %s"
-              (str/join " " args) err)))))
-
-
-(defn- run-proc
-  [& args]
-  (when *verbose*
-    (println (str/join " " args)))
-  @(process args {:out :inherit})
-  nil)
-
-
-(defn- now
-  []
-  (java.time.Instant/now))
-
-
-(defn- ->inst
-  [s]
-  (java.time.Instant/parse s))
 
 
 (defn- print-rows
@@ -81,207 +41,7 @@
         (println (fmt-row row))))))
 
 
-(defn- duration
-  [start end]
-  (let [diff   (java.time.Duration/between end start)
-        units  [[(.toDays diff) "d"]
-                [(mod (.toHours diff) 24) "h"]
-                [(mod (.toMinutes diff) 60) "m"]
-                [(mod (.toSeconds diff) 60) "s"]]
-        result (->> units
-                    (filter (fn [[diff _]] (pos? diff)))
-                    (map (fn [[diff unit]] (format "%d%s" diff unit)))
-                    (str/join))]
-    result))
-
-
-(defn- parse-app
-  [[id created-at state terminated-at]]
-  {:id            id
-   :state         (or state "UNKNOWN")
-   :created-at    created-at
-   :terminated-at (if (= terminated-at "<nil>") nil terminated-at)
-   :driver   (format "%s-driver" id)
-   :age      (duration (now) (->inst created-at))})
-
-
-(defn- jsonpath
-  [fields]
-  (let [formatted-fields (->> fields
-                              (map #(format "{%s}" %))
-                              (str/join "{\"\\t\"}"))
-        jsonpath         (format
-                           "-o=jsonpath={range .items[*]}%s{\"\\n\"}{end}"
-                           formatted-fields)]
-    jsonpath))
-
-
-(defn- spark-apps
-  ([state]
-   (if-let [given-state (and (some? state) (str/upper-case state))]
-     (filter (fn [{:keys [state]}]
-               (= state given-state)) (spark-apps))
-     (spark-apps)))
-  ([]
-   (let [raw-apps (run-sh "kubectl" "get" "sparkapplication"
-                          (jsonpath
-                            [".metadata.name"
-                             ".metadata.creationTimestamp"
-                             ".status.applicationState.state"
-                             ".status.terminationTime"]))
-         apps     (->> raw-apps
-                       (str/split-lines)
-                       (filter #(not (str/blank? %)))
-                       (map #(str/split % #"\t"))
-                       (map parse-app))]
-     apps)))
-
-
-(defn- forward-port
-  [driver port]
-  (run-sh "kubectl" "port-forward" driver (format "%s:4040" port)))
-
-
-(defn- busy?
-  [port]
-  (try
-    (nil? (.close (Socket. "localhost" port)))
-    (catch SocketException _
-      false)))
-
-
-(defn- find-free-port
-  ([]
-   (find-free-port 4040 (+ 50 4040)))
-  ([start limit]
-   (loop [port start]
-     (cond
-       (>= port limit)
-         (fail "Unable to find available port")
-       (not (busy? port))
-         port
-       :else
-         (recur (inc port))))))
-
-
-(defn- spark-ui
-  [{:keys [driver]} _]
-  (let [port  (find-free-port)]
-    (println "Port forwarding" driver
-             (format "to http://localhost:%s..." port))
-    (forward-port driver port)))
-
-
 (declare command-factory)
-
-
-(defn- find-app
-  ([partial-id]
-   (find-app ((command-factory :apps)) partial-id))
-  ([apps partial-id]
-   (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
-     app
-     (fail (format "Unable to find application \"%s\"" partial-id)))))
-
-
-(defn- fresh-app
-  [raw-app]
-  (let [app            (yaml/parse-string raw-app)
-        fresh-metadata (select-keys (:metadata app) [:name :namespace :labels])
-        fresh-app      (-> app
-                           (assoc :metadata fresh-metadata)
-                           (dissoc :status))]
-    fresh-app))
-
-
-(defn- yaml
-  [id]
-  (run-sh "kubectl" "get" "sparkapplication" id "-o" "yaml"))
-
-
-(defn- delete
-  ([{:keys [id]} _]
-   (delete id))
-  ([id]
-   (run-proc "kubectl" "delete" "sparkapplication" id)))
-
-
-(defn- describe
-  [{:keys [id]} _]
-  (run-proc "kubectl" "describe" "sparkapplication" id))
-
-
-(defn- logs
-  [{:keys [driver]} _]
-  (run-proc "kubectl" "logs" "-f" driver))
-
-
-(defn- pods
-  [{:keys [id]} _]
-  (let [label (format "sparkoperator.k8s.io/app-name=%s" id)]
-    (run-proc "kubectl" "get" "pods" "-l" label)))
-
-
-(defn- reapply
-  [{:keys [id]} {:keys [image]}]
-  (let [raw-app   (yaml id)
-        fresh-app (cond-> (fresh-app raw-app)
-                      (some? image) (assoc-in [:spec :image] image))
-        fresh-app (yaml/generate-string fresh-app)
-        fname     (format "/tmp/%s.yaml" id)]
-    (spit fname fresh-app)
-    (println (format "Fresh app created at %s" fname))
-    (delete id)
-    (run-proc "kubectl" "apply" "-f" fname)))
-
-
-(defn- get-yaml
-  [{:keys [id]} {:keys [fresh]}]
-  (let [yaml (cond-> (yaml id)
-                 (some? fresh) (fresh-app))]
-    (println (yaml/generate-string yaml))))
-
-
-(def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods"})
-
-
-(def command-by-name
-  {:delete delete
-
-   :apps spark-apps
-
-   :ui spark-ui
-
-   :get get-yaml
-
-   :desc describe
-
-   :reapply reapply
-
-   :logs logs
-
-   :pods pods})
-
-
-(defn- command-factory
-  [cmd]
-  (get-in command-by-name [cmd]))
-
-
-(defn- fetch-executors
-  []
-  (let [parse (fn [extr]
-                (let [[pod, labels] (str/split extr #"\t")
-                      app (-> labels
-                              (parse-string true)
-                              (:sparkoperator.k8s.io/app-name))]
-                  {:executor pod :app app}))
-        executors (->> (run-sh "kubectl" "get" "pods" "-l" "spark-role=executor" (jsonpath
-                                                                                   [".metadata.name"
-                                                                                    ".metadata.labels"]))
-                       (str/split-lines)
-                       (map parse))]
-    executors))
 
 
 (def wide-info
@@ -296,7 +56,16 @@
                             (assoc app :duration duration)))]
       (comp
         (map add-duration)
-        (map (partial add-executors (fetch-executors)))))))
+        (map (partial add-executors (client/executors)))))))
+
+
+(defn- find-app
+  ([partial-id]
+   (find-app ((command-factory :apps)) partial-id))
+  ([apps partial-id]
+   (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
+     app
+     (fail (format "Unable to find application \"%s\"" partial-id)))))
 
 
 (defn- find-apps-by
@@ -314,6 +83,32 @@
                                           (str/starts-with? id prefix)))
                  (some? wide) (into  [] @wide-info))]
     apps))
+
+
+(def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods"})
+
+
+(def command-by-name
+  {:delete delete
+
+   :apps client/apps
+
+   :ui ui
+
+   :get yaml
+
+   :desc describe
+
+   :reapply reapply
+
+   :logs logs
+
+   :pods pods})
+
+
+(defn- command-factory
+  [cmd]
+  (get-in command-by-name [cmd]))
 
 
 (defn- run-one
