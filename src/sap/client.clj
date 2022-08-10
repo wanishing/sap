@@ -113,4 +113,3 @@
   [fname]
   (run-proc "kubectl" "apply" "-f" fname))
 
-

@@ -6,3 +6,4 @@
 (defn delete
   ([{:keys [id]} _]
    (client/delete id)))
+

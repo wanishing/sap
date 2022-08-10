@@ -6,3 +6,4 @@
 (defn describe
   ([{:keys [id]} _]
    (client/describe id)))
+
