@@ -58,5 +58,4 @@ jobs:
         with:
           artifacts: 'sap-${{ steps.version.outputs.version }}-${{ matrix.os }}.zip'
           token: ${{ secrets.GITHUB_TOKEN }}
-          prerelease: true
           allowUpdates: true
