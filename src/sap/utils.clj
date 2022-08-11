@@ -62,3 +62,25 @@
   [s]
   (java.time.Instant/parse s))
 
+
+(defn print-rows
+  [rows]
+  (when (seq rows)
+    (let [divider (apply str (repeat 4 " "))
+          cols    (keys (first rows))
+          headers (map #(str/upper-case (name %)) cols)
+          widths  (map
+                    (fn [k]
+                      (apply max (count (str k)) (map #(count (str (get % k))) rows)))
+                    cols)
+          fmts    (map #(str "%-" % "s") widths)
+          fmt-row (fn [row]
+                    (apply str
+                           (interpose divider
+                                      (for [[col fmt]
+                                            (map vector (map #(get row %) cols) fmts)]
+                                        (format fmt (str col))))))]
+      (println (fmt-row (zipmap cols headers)))
+      (doseq [row rows]
+        (println (fmt-row row))))))
+

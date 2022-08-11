@@ -5,84 +5,22 @@
     [clojure.java.io :as io]
     [clojure.string :as str]
     [clojure.tools.cli :refer [parse-opts]]
-    [sap.client :as client]
+    [sap.apps :as apps]
     [sap.commands.delete :refer [delete]]
     [sap.commands.describe :refer [describe]]
+    [sap.commands.ls :refer [ls]]
     [sap.commands.logs :refer [logs]]
     [sap.commands.pods :refer [pods]]
     [sap.commands.reapply :refer [reapply]]
     [sap.commands.ui :refer [ui]]
     [sap.commands.yaml :refer [yaml]]
-    [sap.utils :refer [fail now ->inst exit duration]]))
+    [sap.utils :refer [fail exit]]))
 
 
 (def ^:dynamic *verbose* nil)
 
 
-(defn- print-rows
-  [rows]
-  (when (seq rows)
-    (let [divider (apply str (repeat 4 " "))
-          cols    (keys (first rows))
-          headers (map #(str/upper-case (name %)) cols)
-          widths  (map
-                    (fn [k]
-                      (apply max (count (str k)) (map #(count (str (get % k))) rows)))
-                    cols)
-          fmts    (map #(str "%-" % "s") widths)
-          fmt-row (fn [row]
-                    (apply str
-                           (interpose divider
-                                      (for [[col fmt]
-                                            (map vector (map #(get row %) cols) fmts)]
-                                        (format fmt (str col))))))]
-      (println (fmt-row (zipmap cols headers)))
-      (doseq [row rows]
-        (println (fmt-row row))))))
-
-
 (declare command-factory)
-
-
-(def wide-info
-  (delay
-    (let [add-executors (fn [executors {:keys [id] :as app}]
-                          (let [pods (filter #(= id (:app %)) executors)]
-                            (assoc app :executors (count pods))))
-          add-duration  (fn [{:keys [age created-at terminated-at] :as app}]
-                          (let [duration (if (some? terminated-at)
-                                           (duration (->inst terminated-at) (->inst created-at))
-                                           age)]
-                            (assoc app :duration duration)))]
-      (comp
-        (map add-duration)
-        (map (partial add-executors (client/executors)))))))
-
-
-(defn- find-app
-  ([partial-id]
-   (find-app ((command-factory :apps)) partial-id))
-  ([apps partial-id]
-   (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
-     app
-     (fail (format "Unable to find application \"%s\"" partial-id)))))
-
-
-(defn- find-apps-by
-  [{:keys [state id days prefix wide]}]
-  (let [apps (command-factory :apps)
-        apps (if (some? id)
-               [(find-app (apps) id)]
-               (apps state))
-        older? (fn [{:keys [created-at]}]
-                 (let [diff (.toDays (java.time.Duration/between (->inst created-at) (now)))]
-                   (>= diff days)))
-        apps (cond->> apps
-                 (some? days) (filter older?)
-                 (some? prefix) (filter (fn [{:keys [id]}]
-                                          (str/starts-with? id prefix)))
-                 (some? wide) (into  [] @wide-info))]
-    apps))
 
 
 (def commands #{"delete" "cleanup" "ls" "ui" "get" "desc" "logs" "reapply" "pods"})
@@ -91,7 +29,7 @@
 (def command-by-name
   {:delete delete
 
-   :apps client/apps
+   :ls ls
 
    :ui ui
 
@@ -113,14 +51,14 @@
 
 (defn- run-one
   [cmd options]
-  (let [[app & _] (find-apps-by options)
+  (let [[app & _] (apps/find-by options)
         cmd (command-factory cmd)]
     (cmd app options)))
 
 
 (defn- run-many
   [cmd options]
-  (let [apps (find-apps-by options)
+  (let [apps (apps/find-by options)
         cmd  (command-factory cmd)
         cmds (map #(future (cmd % options)) apps)]
     (doseq [cmd cmds]
@@ -142,11 +80,7 @@
 
 
 (defmethod command :ls [{:keys [args]}]
-  (let [invisble-fields [:created-at :terminated-at :driver]]
-    (->> (find-apps-by args)
-         (sort-by (juxt :id :created-at))
-         (map #(reduce (fn [app key] (dissoc app key)) % invisble-fields))
-         (print-rows))))
+  (run-one :ls args))
 
 
 (defmethod command :pods [{:keys [args]}]
@@ -220,6 +154,9 @@
 (defn- version
   []
   (slurp (io/resource "VERSION")))
+
+
+<
 
 
 (defn- validate-command
