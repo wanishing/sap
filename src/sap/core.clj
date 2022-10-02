@@ -14,11 +14,7 @@
     [sap.commands.reapply :refer [reapply]]
     [sap.commands.ui :refer [ui]]
     [sap.commands.yaml :refer [yaml]]
-    [sap.utils :refer [fail exit]]))
-
-
-(def ^:dynamic *verbose* nil)
-
+    [sap.utils :as utils :refer [fail exit]]))
 
 (declare command-factory)
 
@@ -156,9 +152,6 @@
   (slurp (io/resource "VERSION")))
 
 
-<
-
-
 (defn- validate-command
   [commands input]
   (let [cmds (filter #(and (str/starts-with? % input) %) commands)
@@ -196,7 +189,7 @@
     (if exit-message
       (exit (if ok? 0 1) exit-message)
       (do
-        (binding [*verbose* (:verbose options)]
+        (binding [utils/*verbose* (:verbose options)]
           (command {:action action :args options}))
         (exit 0)))))
 

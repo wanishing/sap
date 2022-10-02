@@ -21,12 +21,10 @@
 
 
 (defn- find-app
-  ([partial-id]
-   (find-app (apps) partial-id))
-  ([apps partial-id]
-   (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
-     app
-     (fail (format "Unable to find application \"%s\"" partial-id)))))
+  [apps partial-id]
+  (if-let [app (some (fn [{:keys [id] :as app}] (and (str/includes? id partial-id) app)) apps)]
+    app
+    (fail (format "Unable to find application \"%s\"" partial-id))))
 
 
 (defn find-by
